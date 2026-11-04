@@ -222,7 +222,13 @@ class BrowserWorker:
             lines.append(label)
 
         self._ref_cache = ref_map
-        text = "\n".join(lines)
+        # Controls alone omit article paragraphs and search-result snippets.
+        body = await page.evaluate("""() => {
+            const root = document.querySelector('main, article, [role="main"]') || document.body;
+            return (root?.innerText || '').slice(0, 3000);
+        }""")
+        controls = "\n".join(lines)[:2800]
+        text = f"URL: {page.url}\nTitle: {await page.title()}\nPage text:\n{body}\n\n{controls}"
         if len(text) > MAX_TREE_CHARS:
             text = text[:MAX_TREE_CHARS] + "\n... [truncated to 6000 chars]"
         return text, ref_map

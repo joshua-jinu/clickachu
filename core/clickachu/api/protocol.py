@@ -83,9 +83,7 @@ class Settings(BaseModel):
     # Global "memory off" (§14): no reads into prompts, no writes.
     memory_enabled: bool = True
     # Domains that always require user confirmation even for LOW-tier browser tools (§13.2).
-    sensitive_domains: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SENSITIVE_DOMAINS)
-    )
+    sensitive_domains: list[str] = Field(default_factory=lambda: list(DEFAULT_SENSITIVE_DOMAINS))
     # Browser channel for Playwright: 'msedge' or 'chrome' (PLAN §5, §13.3).
     browser_channel: str = "msedge"
     # Search URL template for browser_search.
@@ -405,6 +403,13 @@ class TokenEvent(BaseModel):
     delta: str
 
 
+class RunDetailEvent(BaseModel):
+    type: Literal["run.detail"] = "run.detail"
+    run_id: str
+    kind: Literal["plan", "reasoning"]
+    delta: str
+
+
 class StepStartedEvent(BaseModel):
     type: Literal["step.started"] = "step.started"
     run_id: str
@@ -477,6 +482,7 @@ class VoiceDoneEvent(BaseModel):
 ServerMessage = Annotated[
     RunStartedEvent
     | TokenEvent
+    | RunDetailEvent
     | StepStartedEvent
     | ApprovalRequestEvent
     | StepFinishedEvent

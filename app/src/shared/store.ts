@@ -30,6 +30,10 @@ export interface RunState {
   status: RunStatus
   error?: string
   usage?: Usage
+  startedAt?: number
+  finishedAt?: number
+  plan?: string
+  reasoning?: string
 }
 
 export interface DailyUsage {
@@ -119,7 +123,9 @@ function endRun(runId: string): Partial<ClickachuState> {
 
 function patchRun(runId: string, patch: (run: RunState) => Partial<RunState>): void {
   useStore.setState((s) => {
-    const run = s.runs[runId] ?? { mode: 'ask', text: '', steps: [], status: 'running' }
+    const run = s.runs[runId] ?? {
+      mode: 'ask', text: '', steps: [], status: 'running', startedAt: Date.now(),
+    }
     return { runs: { ...s.runs, [runId]: { ...run, ...patch(run) } } }
   })
 }
@@ -152,12 +158,14 @@ export function recordChatRun(opts: {
           text: opts.answer ?? '',
           steps: [],
           status: opts.answer !== undefined ? 'done' : 'running',
+          startedAt: opts.answer === undefined ? Date.now() : undefined,
         }
     const inHistory = s.chatHistory.includes(opts.runId)
     return {
       runs: { ...s.runs, [opts.runId]: nextRun },
       chatHistory: inHistory ? s.chatHistory : [...s.chatHistory, opts.runId],
       lastRunId: opts.runId,
+      ...(nextRun.status === 'running' ? { activeRunId: opts.runId } : {}),
     }
   })
 }
@@ -205,6 +213,9 @@ export function bindStore(client: WsClient): () => void {
       }))
     }),
     client.on('token', (m) => patchRun(m.run_id, (run) => ({ text: run.text + m.delta }))),
+    client.on('run.detail', (m) => patchRun(m.run_id, (run) => ({
+      [m.kind]: (run[m.kind] ?? '') + m.delta,
+    }))),
     client.on('step.started', (m) =>
       patchRun(m.run_id, (run) => ({
         steps: [
@@ -263,6 +274,7 @@ export function bindStore(client: WsClient): () => void {
         text: m.text,
         usage: m.usage,
         status: m.ok ? 'done' : 'cancelled',
+        finishedAt: Date.now(),
       }))
       if (m.usage) {
         useStore.setState((s) => {
@@ -289,7 +301,7 @@ export function bindStore(client: WsClient): () => void {
       hydrateStepLogs(m.run_id)
     }),
     client.on('run.error', (m) => {
-      patchRun(m.run_id, () => ({ status: 'error', error: m.message }))
+      patchRun(m.run_id, () => ({ status: 'error', error: m.message, finishedAt: Date.now() }))
       useStore.setState(endRun(m.run_id))
     }),
     client.on('memory.saved', (m) =>

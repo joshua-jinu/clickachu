@@ -10,12 +10,42 @@ from clickachu.llm.provider import LLMError, LLMProvider
 
 log = logging.getLogger(__name__)
 
+_WEB_LOOKUP = re.compile(
+    r"\b(?:(?:search|check|browse|look|verify|research)\s*"
+    r"(?:(?:it|this|that)\s+)?(?:online|the\s+(?:web|internet)|on\s+the\s+(?:web|internet))"
+    r"|look\s+(?:it|this|that)\s+up|google\s+(?:it|this|that)"
+    r"|(?:search|look|check|find|verify|research)\b[^.!?\n]{0,80}\bonline)\b",
+    re.IGNORECASE,
+)
+_NO_ACTION = re.compile(
+    r"\b(?:don't|do\s+not|never)\s+(?:search|check|browse|look|google|do\s+anything)\b",
+    re.IGNORECASE,
+)
+
+
+def web_lookup_requested(text: str) -> bool:
+    """Explicit lookup intent, shared by routing and tool selection."""
+    return bool(_WEB_LOOKUP.search(text)) and not bool(_NO_ACTION.search(text))
+
+
+def notepad_write_requested(text: str) -> bool:
+    """A bounded unsaved-editor task; explicit file/save requests use the general agent."""
+    return (
+        bool(re.search(r"\bnotepad(?:\.exe)?\b", text, re.IGNORECASE))
+        and bool(re.search(r"\b(?:write|type|put|draft|compose|insert)\b", text, re.IGNORECASE))
+        and not bool(re.search(r"\b(?:save|file|folder|path)\b", text, re.IGNORECASE))
+        and not bool(
+            re.match(r"\s*(?:how\s+(?:do|can|to)|explain|don't|do\s+not)", text, re.IGNORECASE)
+        )
+    )
+
+
 ROUTER_TIMEOUT_S = 3.0
 
 ROUTER_SYSTEM = """\
 You are a mode classifier.
-- "agent": The user wants to execute actions on their PC (e.g. open apps, click, browse websites, manage files, run terminal commands).
-- "ask": The user wants an answer, conversation, explanation, advice, code, or information (e.g. greetings, "what model are you", math, questions).
+- "agent": The user wants actions on their PC: apps, websites, files, or project commands.
+- "ask": The user wants conversation, explanations, advice, code, or information.
 Reply with JSON only: {"mode": "ask"} or {"mode": "agent"}"""
 
 # Imperative PC / file / browser action patterns (PLAN §11 step 2).
@@ -63,7 +93,7 @@ _CONCEPTUAL_QUESTION = re.compile(
     re.IGNORECASE,
 )
 
-# Fast greetings, identity, and conversational checks that should never trigger agent mode or router calls.
+# Fast greetings and identity checks that need no router call.
 _GREETING_OR_IDENTITY = re.compile(
     r"^\s*(?:"
     r"hello\b|hi\b|hey\b|howdy\b|greetings\b|good\s+(?:morning|afternoon|evening|day)\b|"
@@ -88,6 +118,10 @@ def heuristic_mode(
     stripped = text.strip().strip("\"'“”`")
     if not stripped:
         return "ask"
+    if _NO_ACTION.search(stripped):
+        return "ask"
+    if web_lookup_requested(stripped) or notepad_write_requested(stripped):
+        return "agent"
     if _AGENT_HEURISTIC.search(stripped):
         return "agent"
     if _LOCATION_ACTION.search(stripped):

@@ -238,6 +238,7 @@ def test_agent_auto_tool_search_files_and_log(
     assert types == [
         "run.started",
         "orb.state",
+        "run.detail",
         "token",
         "step.started",
         "orb.state",

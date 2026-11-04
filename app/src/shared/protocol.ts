@@ -335,6 +335,13 @@ export interface TokenEvent {
   delta: string
 }
 
+export interface RunDetailEvent {
+  type: 'run.detail'
+  run_id: string
+  kind: 'plan' | 'reasoning'
+  delta: string
+}
+
 export interface StepStartedEvent {
   type: 'step.started'
   run_id: string
@@ -407,6 +414,7 @@ export interface VoiceDoneEvent {
 export type ServerMessage =
   | RunStartedEvent
   | TokenEvent
+  | RunDetailEvent
   | StepStartedEvent
   | ApprovalRequestEvent
   | StepFinishedEvent

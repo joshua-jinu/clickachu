@@ -12,6 +12,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "lint": "eslint .",
+    "test:ui": "node --test tests/streaming.test.cjs",
     "format": "prettier --write ."
   },
   "dependencies": {

@@ -1,13 +1,15 @@
 """Gemini / OpenAI-compatible LLM provider via the `openai` SDK (PLAN §11)."""
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import openai
 
 from clickachu.api.protocol import Usage
-from clickachu.llm.provider import Done, LLMError, LLMEvent, TextDelta, ToolCall
+from clickachu.llm.provider import Done, LLMError, LLMEvent, ReasoningDelta, TextDelta, ToolCall
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +31,9 @@ class OpenRouterProvider:
         self._client = openai.AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "ollama",
-            timeout=TIMEOUT_S,
+            timeout=httpx.Timeout(
+                TIMEOUT_S, connect=5.0, read=180.0 if self._is_ollama else TIMEOUT_S
+            ),
             max_retries=1 if self._is_ollama else MAX_RETRIES,
             default_headers=OPENROUTER_HEADERS if self._is_openrouter else None,
         )
@@ -41,6 +45,15 @@ class OpenRouterProvider:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 2048,
     ) -> AsyncIterator[LLMEvent]:
+        started = time.monotonic()
+        first_output = False
+        log.info(
+            "model request: model=%s messages=%d tools=%d prompt_chars=%d",
+            model,
+            len(messages),
+            len(tools or []),
+            sum(len(str(m.get("content") or "")) for m in messages),
+        )
         kwargs: dict[str, Any] = {}
         if tools:
             kwargs["tools"] = tools
@@ -76,6 +89,18 @@ class OpenRouterProvider:
                         usage = _usage(chunk.usage)
                     for choice in chunk.choices:
                         delta = choice.delta
+                        reasoning = getattr(delta, "reasoning", None) or getattr(
+                            delta, "reasoning_content", None
+                        )
+                        if isinstance(reasoning, str) and reasoning:
+                            yield ReasoningDelta(reasoning)
+                        if not first_output and (delta.content or delta.tool_calls):
+                            first_output = True
+                            log.info(
+                                "model first output: model=%s elapsed=%.2fs",
+                                model,
+                                time.monotonic() - started,
+                            )
                         if delta.content:
                             yield TextDelta(delta.content)
                         for tc in delta.tool_calls or []:
@@ -94,6 +119,13 @@ class OpenRouterProvider:
         except openai.APIStatusError as exc:
             raise LLMError(self._format_status_error(exc, model)) from exc
         except openai.APIError as exc:
+            log.warning(
+                "model stream failed: model=%s elapsed=%.2fs error=%s cause=%s",
+                model,
+                time.monotonic() - started,
+                type(exc).__name__,
+                type(exc.__cause__).__name__,
+            )
             raise LLMError(self._format_api_error(exc, mid_stream=True)) from exc
 
         for index in sorted(pending_tools):
@@ -105,6 +137,13 @@ class OpenRouterProvider:
                 extra_content=slot.get("extra_content"),
             )
         yield Done(usage)
+        log.info(
+            "model complete: model=%s elapsed=%.2fs input_tokens=%d output_tokens=%d",
+            model,
+            time.monotonic() - started,
+            usage.input_tokens,
+            usage.output_tokens,
+        )
 
     def _provider_label(self) -> str:
         if self._is_gemini:
@@ -121,8 +160,7 @@ class OpenRouterProvider:
         label = self._provider_label()
         if self._is_ollama and code == 404:
             return (
-                f"Model '{model}' not found in Ollama — "
-                f"run 'ollama pull {model}' to download it."
+                f"Model '{model}' not found in Ollama — run 'ollama pull {model}' to download it."
             )
         if code in (400, 401) and (
             code == 401 or "api_key_invalid" in msg.lower() or "api key not valid" in msg.lower()
@@ -138,23 +176,31 @@ class OpenRouterProvider:
             return f"{label} rate limit reached — please wait a moment before trying again. ({msg})"
         if code in (500, 502, 503, 504):
             return (
-                f"{label} service is temporarily unavailable ({code}) — "
-                "please try again shortly."
+                f"{label} service is temporarily unavailable ({code}) — please try again shortly."
             )
         return f"Model request failed ({code}): {msg}"
 
     def _format_api_error(self, exc: openai.APIError, *, mid_stream: bool = False) -> str:
         prefix = "Model stream interrupted" if mid_stream else "Model request failed"
         label = self._provider_label()
+        # APITimeoutError inherits APIConnectionError: check it first.
+        if isinstance(exc, openai.APITimeoutError):
+            return (
+                f"{prefix}: {label} took too long to respond. "
+                "The model may still be running; this does not mean it crashed."
+            )
         if self._is_ollama and isinstance(exc, openai.APIConnectionError):
+            if mid_stream:
+                return (
+                    f"{prefix}: the connection to Ollama was lost while generating. "
+                    "Completed actions have not been undone. Check Ollama's server log for details."
+                )
             return (
                 f"{prefix}: could not reach Ollama at {self._base_url} — "
                 "make sure Ollama is running."
             )
         if isinstance(exc, openai.APIConnectionError):
             return f"{prefix}: could not reach {label} — check your internet connection."
-        if isinstance(exc, openai.APITimeoutError):
-            return f"{prefix}: request timed out — the model service took too long to respond."
         return f"{prefix}: {exc.message}"
 
 

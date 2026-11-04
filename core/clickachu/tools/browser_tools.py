@@ -93,11 +93,12 @@ class BrowserSearchTool(Tool[BrowserSearchArgs]):
         try:
             page = await worker.open_url(url, run_id=ctx.run_id)
             title = await page.title()
+            page_text, _ = await worker.read_snapshot(run_id=ctx.run_id)
             return ToolResult(
                 ok=True,
                 data={"url": page.url, "title": title, "query": args.query},
                 summary=f"Searched for {args.query!r} ({page.url})",
-                untrusted_text=f"Search URL: {page.url}\nTitle: {title}",
+                untrusted_text=f"Search URL: {page.url}\nTitle: {title}\n{page_text}",
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, summary=f"Search failed for {args.query!r}: {exc}")

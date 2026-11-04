@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from clickachu.llm.router import notepad_write_requested, web_lookup_requested
 from clickachu.tools.base import Tier, Tool
 from clickachu.tools.browser_tools import (
     BrowserClickTool,
@@ -31,6 +32,7 @@ from clickachu.tools.files import (
     WriteFileTool,
 )
 from clickachu.tools.memory_tools import RecallTool, RememberTool
+from clickachu.tools.notepad import WriteNotepadTool
 from clickachu.tools.process_tools import (
     GetProcessLogsTool,
     RunProjectCommandTool,
@@ -85,8 +87,19 @@ class ToolRegistry:
         return out
 
     def scoped_schemas(self, prompt: str) -> list[dict[str, Any]]:
-        """Return a relevant subset of tool schemas for local models to reduce latency and token bloat."""
+        """Limit local-model tools to the relevant workflow to reduce latency and ambiguity."""
         p_lower = prompt.lower()
+        if notepad_write_requested(prompt):
+            return self.schemas(names=["write_notepad"])
+        if web_lookup_requested(prompt):
+            return self.schemas(
+                names=[
+                    "browser_search",
+                    "browser_read",
+                    "browser_open",
+                    "browser_click",
+                ]
+            )
         is_file = any(
             w in p_lower
             for w in (
@@ -113,7 +126,7 @@ class ToolRegistry:
                 "note",
             )
         )
-        is_browser = any(
+        is_browser = web_lookup_requested(prompt) or any(
             w in p_lower
             for w in (
                 "browse",
@@ -123,6 +136,7 @@ class ToolRegistry:
                 "url",
                 "search the web",
                 "search online",
+                "online",
                 "http",
                 "google",
             )
@@ -227,6 +241,7 @@ def create_default_registry() -> ToolRegistry:
     reg.register(OpenAppTool())
     reg.register(FocusWindowTool())
     reg.register(TypeTextTool())
+    reg.register(WriteNotepadTool())
     # Files
     reg.register(SearchFilesTool())
     reg.register(ReadFileTool())

@@ -8,6 +8,8 @@ import { ApprovalCard } from '@shared/components/ApprovalCard'
 import { CopyButton } from '@shared/components/CopyButton'
 import { Markdown } from '@shared/components/Markdown'
 import { StepTimeline } from '@shared/components/StepTimeline'
+import { RunTimer } from '@shared/components/RunTimer'
+import { RunDetails } from '@shared/components/RunDetails'
 import type { ApprovalDecision } from '@shared/protocol'
 import { recordChatRun, startNewChat, useStore } from '@shared/store'
 import { stripVoiceTags } from '@shared/voiceSpeech'
@@ -28,7 +30,8 @@ function ChatTurn({ runId }: { runId: string }) {
     <div className="group space-y-2.5 py-2 text-sm">
       {/* User message bubble (sleek right-aligned pill like ChatGPT/Claude) */}
       {run.prompt && (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          <RunTimer runId={runId} />
           <div className="max-w-[88%] rounded-2xl rounded-tr-xs border border-white/[0.07] bg-white/[0.07] px-3.5 py-2 text-sm leading-relaxed text-ck-text">
             {run.prompt}
           </div>
@@ -37,6 +40,7 @@ function ChatTurn({ runId }: { runId: string }) {
 
       {/* Assistant technical steps, approvals & markdown */}
       <div className="space-y-2.5 pl-0.5">
+        <RunDetails run={run} />
         {run.steps.length > 0 && <StepTimeline steps={run.steps} />}
 
         {pendingApprovals.map((st) => (
@@ -149,6 +153,14 @@ export function ChatTab() {
     recordChatRun({ runId: id, prompt: text })
     if (ws.send({ type: 'run', run_id: id, text, conversation_id: convId })) {
       setPrompt('')
+    } else {
+      useStore.setState((s) => ({
+        activeRunId: null,
+        runs: { ...s.runs, [id]: {
+          ...s.runs[id], status: 'error', finishedAt: Date.now(),
+          error: 'Not sent: Clickachu core is disconnected.',
+        } },
+      }))
     }
   }
 

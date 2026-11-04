@@ -21,8 +21,10 @@ import { ActionChips } from '@shared/components/ActionChips'
 import { ContextChip, SelectionPreview } from '@shared/components/ContextChip'
 import { ReconnectingBanner } from '@shared/components/ReconnectingBanner'
 import { ResultActions } from '@shared/components/ResultActions'
+import { RunTimer } from '@shared/components/RunTimer'
+import { RunDetails } from '@shared/components/RunDetails'
 import type { ContextSnapshot, ReplaceMode, RunAction, RunMode } from '@shared/protocol'
-import { type RunState, useStore } from '@shared/store'
+import { recordChatRun, type RunState, useStore } from '@shared/store'
 import { speechEngine, splitVoiceAndTechnical } from '@shared/voiceSpeech'
 import { ws } from '@shared/ws'
 import { OrbScene, type OrbVisualState } from '../orb/orbScene'
@@ -49,12 +51,6 @@ const CHIP_LABEL: Partial<Record<RunAction, string>> = {
 
 const isRunning = (run: RunState | undefined): boolean =>
   run === undefined || run.status === 'running'
-
-function withHistory(history: { question: string; answer: string }[], text: string): string {
-  if (history.length === 0) return text
-  const prior = history.map((h) => `Q: ${h.question}\nA: ${h.answer}`).join('\n\n')
-  return `Earlier in this conversation:\n${prior}\n\nFollow-up: ${text}`
-}
 
 function AutoTextarea(props: {
   value: string
@@ -459,16 +455,27 @@ export function QuickBar() {
     ) => {
       speechEngine.stop()
       const runId = `run_${crypto.randomUUID()}`
+      const conversationId = useStore.getState().activeConversationId || `conv_${crypto.randomUUID()}`
+      useStore.setState({ activeConversationId: conversationId })
+      recordChatRun({ runId, prompt: question, mode })
       if (
         !ws.send({
           type: 'run',
           run_id: runId,
+          conversation_id: conversationId,
           text,
           mode,
           action,
           context_id: explicitContextId ?? contextId,
         })
       ) {
+        useStore.setState((s) => ({
+          activeRunId: null,
+          runs: { ...s.runs, [runId]: {
+            ...s.runs[runId], status: 'error', finishedAt: Date.now(),
+            error: 'Not sent: Clickachu core is disconnected.',
+          } },
+        }))
         setNotice('Connecting to Clickachu core — try again in a moment.')
         return false
       }
@@ -624,11 +631,7 @@ export function QuickBar() {
       return
     }
     if (exchanges.length > 0) {
-      const history = exchanges.map((x) => ({
-        question: x.question,
-        answer: runs[x.runId]?.text ?? '',
-      }))
-      if (start(q, withHistory(history, q), true)) {
+      if (start(q, q, true)) {
         setPrompt('')
       }
       return
@@ -815,10 +818,12 @@ export function QuickBar() {
               }`}
             />
             <span className="font-medium tracking-tight">{statusLabel}</span>
+            {last && <RunTimer runId={last.runId} />}
           </div>
         </div>
 
         {/* Conversational Voice Response Subtitle Card */}
+        {lastRun && <RunDetails run={lastRun} />}
         {showConversationalCaption && (
           <div className="w-full shrink-0 space-y-2 rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4 py-3 text-center">
             {last && (

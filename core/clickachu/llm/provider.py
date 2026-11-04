@@ -13,6 +13,11 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
+class ReasoningDelta:
+    text: str
+
+
+@dataclass(frozen=True)
 class ToolCall:
     id: str
     name: str
@@ -25,7 +30,7 @@ class Done:
     usage: Usage = field(default_factory=Usage)
 
 
-LLMEvent = TextDelta | ToolCall | Done
+LLMEvent = TextDelta | ReasoningDelta | ToolCall | Done
 
 
 class LLMError(Exception):

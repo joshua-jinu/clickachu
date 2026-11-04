@@ -73,7 +73,7 @@ export function splitVoiceAndTechnical(raw: string, hasSteps = false): VoiceSpli
       WINDOWS_OR_UNIX_PATH.test(withoutThoughts)
     return {
       voiceSummary: sanitizeForSpeech(voiceRaw) || 'Here are the details in the side panel.',
-      cleanMarkdown: remainder || voiceRaw,
+      cleanMarkdown: stripVoiceTags(withoutThoughts),
       hasTechnicalDetails: hasTech,
       isStreamingVoice: false,
     }
@@ -137,14 +137,9 @@ export function splitVoiceAndTechnical(raw: string, hasSteps = false): VoiceSpli
   }
 }
 
-/** Strips <voice>...</voice> wrapper tags so Markdown in the Side Panel stays clean. */
+/** Preserve the spoken introduction in written answers; remove only its wrapper. */
 export function stripVoiceTags(raw: string): string {
-  const closed = raw.replace(/<voice>([\s\S]*?)<\/voice>\s*/gi, (_, inner: string) => {
-    // If there is nothing after </voice>, keep the inner text so the message isn't blank
-    const rest = raw.replace(/<voice>[\s\S]*?<\/voice>/i, '').trim()
-    return rest ? '' : inner.trim()
-  })
-  return closed.replace(/<\/?voice>/gi, '').trim()
+  return raw.replace(/<voice>/gi, '').replace(/<\/voice>/gi, '\n\n').trim()
 }
 
 /**

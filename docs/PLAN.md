@@ -227,6 +227,7 @@ Server → client (broadcast to all windows)
 ```ts
 {type:"run.started", run_id, mode}
 {type:"token", run_id, delta}
+{type:"run.detail", run_id, kind:"plan"|"reasoning", delta}
 {type:"step.started", run_id, step_id, tool, summary, tier}
 {type:"approval.request", run_id, step_id, tool, args, preview}
 {type:"step.finished", run_id, step_id, ok, summary, verified: true|false|null}
@@ -513,6 +514,7 @@ Sensitive domains: banking/payment/email-send patterns (configurable list).
 | `focus_window(title)` | low | com | foreground matches |
 | `remember(content, category, scope_type, scope_key)` | low | io | row exists |
 | `type_text(window, text)` | confirm | com | control value contains |
+| `write_notepad(text)` | confirm | com | fresh empty editor, pasted text read back; left unsaved |
 | `create_folder(path)` | confirm | io | exists |
 | `move_file(src, dst)` | confirm | io | dst exists, src gone |
 | `write_file(path, content)` | confirm (diff preview) | io | hash matches |
@@ -528,6 +530,10 @@ process name **and** title (Windows 11 Notepad hands off to another process).
 ---
 
 ## §14 Memory (`memory/`)
+
+Memory retrieval uses local SQLite FTS5. It does not provide web access: explicit online requests
+must be routed to agent mode with browser tools. Browser reads include page text as well as controls.
+
 
 - **Write paths:** user says "remember …" (agent calls `remember`), approving a project profile,
   editing in the Memory tab. Agent may also call `remember` from its own judgement **only** for

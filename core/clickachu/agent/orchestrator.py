@@ -24,6 +24,7 @@ from clickachu.api.protocol import (
     MemorySavedEvent,
     OrbStateEvent,
     OrbStateName,
+    RunDetailEvent,
     RunErrorEvent,
     RunFinishedEvent,
     RunMessage,
@@ -40,14 +41,18 @@ from clickachu.context.capture import ContextStore
 from clickachu.db.conn import Database
 from clickachu.llm.prompts import (
     AGENT_SYSTEM,
-    SYSTEM_BASE,
     action_instruction,
     memory_block,
     system_base_prompt,
     wrap_untrusted,
 )
-from clickachu.llm.provider import Done, LLMError, LLMProvider, TextDelta, ToolCall
-from clickachu.llm.router import _GREETING_OR_IDENTITY, route_mode
+from clickachu.llm.provider import Done, LLMError, LLMProvider, ReasoningDelta, TextDelta, ToolCall
+from clickachu.llm.router import (
+    _GREETING_OR_IDENTITY,
+    notepad_write_requested,
+    route_mode,
+    web_lookup_requested,
+)
 from clickachu.memory.remember import is_remember_request
 from clickachu.memory.service import MemoryService
 from clickachu.memory.store import now_iso, scope_label
@@ -84,6 +89,7 @@ def should_include_selection(msg: RunMessage, *, agent: bool = False) -> bool:
     if _SELECTION_REFERENCE.search(text):
         return True
     return False
+
 
 Emit = Callable[[ServerMessage], Awaitable[None]]
 # (settings, api_key) -> provider; rebuilt per run so settings/key changes apply immediately.
@@ -246,6 +252,14 @@ class Orchestrator:
                     await self._emit(TokenEvent(run_id=msg.run_id, delta=event.text))
                 elif isinstance(event, Done):
                     usage = event.usage
+                elif isinstance(event, ReasoningDelta):
+                    await self._emit(
+                        RunDetailEvent(
+                            run_id=msg.run_id,
+                            kind="reasoning",
+                            delta=event.text,
+                        )
+                    )
         except asyncio.CancelledError:
             log.info("run %s cancelled", msg.run_id)
             await self._emit(
@@ -268,9 +282,7 @@ class Orchestrator:
             usage.output_tokens,
             usage.cost_usd,
         )
-        await self._emit(
-            RunFinishedEvent(run_id=msg.run_id, ok=True, text=answer, usage=usage)
-        )
+        await self._emit(RunFinishedEvent(run_id=msg.run_id, ok=True, text=answer, usage=usage))
         await self._emit(OrbStateEvent(state="idle"))
 
     async def _run_agent(
@@ -326,6 +338,19 @@ class Orchestrator:
             tool_schemas = (
                 self._registry.scoped_schemas(msg.text) if is_ollama else self._registry.schemas()
             )
+            notepad_workflow = (
+                notepad_write_requested(msg.text)
+                and self._registry.get("write_notepad") is not None
+            )
+            plan = (
+                "Generate the requested text once, then request approval to write it into a fresh "
+                "empty Notepad document. Verify the editor text and leave it open, unsaved."
+                if notepad_workflow
+                else "Search online for the conversation topic, read the results, and cite sources."
+                if web_lookup_requested(msg.text)
+                else "Inspect the relevant context, choose the next tool, and verify its result."
+            )
+            await self._emit(RunDetailEvent(run_id=msg.run_id, kind="plan", delta=plan))
 
             for _step_num in range(1, MAX_STEPS + 1):
                 await set_orb("thinking")
@@ -335,28 +360,91 @@ class Orchestrator:
 
                 turn_text: list[str] = []
                 tool_calls: list[ToolCall] = []
+                generation_messages = messages
+                if notepad_workflow:
+                    # The application owns the workflow; the model only writes the document.
+                    # No tool schemas, root lists, drafts or save-location roundtrips are needed.
+                    document_request = msg.text
+                    if snapshot and snapshot.selection and should_include_selection(msg):
+                        document_request = (
+                            context_block(
+                                snapshot,
+                                max_selection_chars=1500,
+                            )
+                            + "\n\n"
+                            + msg.text
+                        )
+                    generation_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Write the requested document for an empty Notepad editor. "
+                                "Return only plain text. No Markdown fences, planning, tool calls, "
+                                "questions about saving, or claims of execution. "
+                                "Keep it concise unless the user requests length."
+                            )
+                            + (f"\n{memory_block(memories)}" if memories else ""),
+                        },
+                        *(history[-2:] if _SELECTION_REFERENCE.search(msg.text) else []),
+                        {"role": "user", "content": document_request},
+                    ]
                 async for event in provider.stream(
-                    model, messages, tools=tool_schemas, max_tokens=ASK_MAX_TOKENS
+                    model,
+                    generation_messages,
+                    tools=None if notepad_workflow else tool_schemas,
+                    max_tokens=768 if notepad_workflow and is_ollama else ASK_MAX_TOKENS,
                 ):
                     if isinstance(event, TextDelta):
                         turn_text.append(event.text)
-                        text_parts.append(event.text)
-                        await self._emit(TokenEvent(run_id=msg.run_id, delta=event.text))
+                        if not notepad_workflow:
+                            text_parts.append(event.text)
+                            await self._emit(TokenEvent(run_id=msg.run_id, delta=event.text))
+                    elif isinstance(event, ReasoningDelta):
+                        await self._emit(
+                            RunDetailEvent(
+                                run_id=msg.run_id,
+                                kind="reasoning",
+                                delta=event.text,
+                            )
+                        )
                     elif isinstance(event, ToolCall):
                         tool_calls.append(event)
                     elif isinstance(event, Done):
                         total_usage = _add_usage(total_usage, event.usage)
 
+                if notepad_workflow:
+                    if total_usage.output_tokens >= (768 if is_ollama else ASK_MAX_TOKENS):
+                        raise LLMError(
+                            "Document generation reached its length limit; nothing was typed. "
+                            "Request a shorter document and try again."
+                        )
+                    document = "".join(turn_text).strip()
+                    # Some local models emit these wrappers despite content-only instructions.
+                    document = re.sub(
+                        r"<(?:think|thought)>.*?</(?:think|thought)>", "", document, flags=re.DOTALL
+                    ).strip()
+                    document = re.sub(r"^```(?:\w+)?\s*\n([\s\S]*?)\n```$", r"\1", document).strip()
+                    tool_calls = [
+                        ToolCall(
+                            id=f"notepad_{msg.run_id}",
+                            name="write_notepad",
+                            arguments_json=json.dumps({"text": document}),
+                        )
+                    ]
+                    turn_text = []
+
                 if not tool_calls:
                     turn_combined = "".join(turn_text).strip()
                     action_intent = bool(
                         re.search(
-                            r"\b(i will|let's|proceed to|going to|next,?\s*i|trying to)\s+(create|write|open|read|delete|move|run|execute|search)\b",
+                            r"\b(i will|let's|proceed to|going to|next,?\s*i|trying to)\s+"
+                            r"(create|write|open|read|delete|move|run|execute|search)\b",
                             turn_combined,
                             re.IGNORECASE,
                         )
                     )
-                    if action_intent and nudges < 1:
+                    needs_lookup = web_lookup_requested(msg.text) and _step_num == 1
+                    if (action_intent or needs_lookup) and nudges < 1:
                         nudges += 1
                         log.info(
                             "Agent stated intent without tool calls on step %d, nudging...",
@@ -367,7 +455,10 @@ class Orchestrator:
                             {
                                 "role": "user",
                                 "content": (
-                                    "Please proceed now and execute the required tool call "
+                                    "Use browser_search now for the topic in this conversation. "
+                                    "Return a tool call; do not suggest a manual search."
+                                    if needs_lookup
+                                    else "Please proceed now and execute the required tool call "
                                     "using the function calling format."
                                 ),
                             }
@@ -437,16 +528,17 @@ class Orchestrator:
                             )
                             continue
                         await self._finish_validation_failure(
-                            msg.run_id, conversation_id, tool.name, err_text, text_parts, total_usage
+                            msg.run_id,
+                            conversation_id,
+                            tool.name,
+                            err_text,
+                            text_parts,
+                            total_usage,
                         )
                         return
 
                     step_seq += 1
-                    step_id = (
-                        tc.id
-                        if tc.id and tc.id not in used_step_ids
-                        else f"step_{step_seq}"
-                    )
+                    step_id = tc.id if tc.id and tc.id not in used_step_ids else f"step_{step_seq}"
                     used_step_ids.add(step_id)
 
                     latest_settings = self._settings.get()
@@ -569,6 +661,19 @@ class Orchestrator:
                                     ),
                                 }
                             )
+                            if notepad_workflow:
+                                final_text = f"Notepad operation {reason}; nothing was written."
+                                self._record_message(conversation_id, "assistant", final_text)
+                                await self._emit(
+                                    RunFinishedEvent(
+                                        run_id=msg.run_id,
+                                        ok=False,
+                                        text=final_text,
+                                        usage=total_usage,
+                                    )
+                                )
+                                await set_orb("idle")
+                                return
                             continue
                         if user_decision == "always":
                             log_decision = "always"
@@ -591,6 +696,16 @@ class Orchestrator:
                         emit=self._emit,
                     )
                     result, verified = await self._execute_and_verify(tool, parsed_args, ctx)
+                    # Persist action evidence immediately, even if the next model call fails.
+                    self._record_message(
+                        conversation_id,
+                        "assistant",
+                        wrap_untrusted(
+                            "action_result",
+                            f"Tool {tool.name}: ok={result.ok}, verified={verified}. "
+                            f"{result.summary[:1000]}",
+                        ),
+                    )
                     if verified is not True and ctx.unverified_cleanup:
                         active.unverified_cleanup.extend(ctx.unverified_cleanup)
 
@@ -627,6 +742,26 @@ class Orchestrator:
                             "content": wrap_untrusted(f"tool:{tool.name}", truncated),
                         }
                     )
+                    if notepad_workflow:
+                        # Tool evidence is sufficient: don't regenerate a long final answer.
+                        final_text = result.summary
+                        if result.ok and verified is not True:
+                            final_text = (
+                                "Notepad text could not be verified. Inspect the new document "
+                                "before retrying. No file was saved."
+                            )
+                        self._record_message(conversation_id, "assistant", final_text)
+                        await self._emit(TokenEvent(run_id=msg.run_id, delta=final_text))
+                        await self._emit(
+                            RunFinishedEvent(
+                                run_id=msg.run_id,
+                                ok=result.ok and verified is True,
+                                text=final_text,
+                                usage=total_usage,
+                            )
+                        )
+                        await set_orb("idle")
+                        return
 
             # MAX_STEPS reached (§12): summarise progress and ask user how to continue.
             bullets = "\n".join(f"- {s}" for s in completed_summaries[-MAX_STEPS:])
@@ -641,9 +776,7 @@ class Orchestrator:
             final_text = "".join(text_parts)
             self._record_message(conversation_id, "assistant", final_text)
             await self._emit(
-                RunFinishedEvent(
-                    run_id=msg.run_id, ok=True, text=final_text, usage=total_usage
-                )
+                RunFinishedEvent(run_id=msg.run_id, ok=True, text=final_text, usage=total_usage)
             )
             await set_orb("idle")
         except asyncio.CancelledError:
@@ -685,6 +818,12 @@ class Orchestrator:
             raise
         except LLMError as exc:
             log.warning("agent run %s failed: %s", msg.run_id, exc)
+            self._record_message(
+                conversation_id,
+                "assistant",
+                "Run interrupted before completion. Earlier recorded tool results still apply. "
+                + str(exc),
+            )
             await self._fail(msg.run_id, str(exc))
 
     async def _await_approval(
@@ -715,9 +854,7 @@ class Orchestrator:
             )
         except TimeoutError:
             return (
-                ToolResult(
-                    ok=False, summary=f"{tool.name} timed out after {tool.timeout_s:g}s"
-                ),
+                ToolResult(ok=False, summary=f"{tool.name} timed out after {tool.timeout_s:g}s"),
                 None,
             )
         except asyncio.CancelledError:
@@ -765,9 +902,7 @@ class Orchestrator:
         await self._emit(TokenEvent(run_id=run_id, delta=note))
         final_text = "".join(text_parts)
         self._record_message(conversation_id, "assistant", final_text)
-        await self._emit(
-            RunFinishedEvent(run_id=run_id, ok=True, text=final_text, usage=usage)
-        )
+        await self._emit(RunFinishedEvent(run_id=run_id, ok=True, text=final_text, usage=usage))
         await self._emit(OrbStateEvent(state="idle"))
 
     def _log_action(
@@ -837,7 +972,8 @@ class Orchestrator:
         conn = self._db.conn()
         with conn:
             cursor = conn.execute(
-                "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT role, content FROM messages WHERE conversation_id = ? "
+                "ORDER BY id DESC LIMIT ?",
                 (conversation_id, limit),
             )
             rows = cursor.fetchall()
@@ -971,7 +1107,9 @@ def _build_initial_messages(
             pass
         else:
             max_sel = 3500 if is_ollama else None
-            ctx = context_block(snapshot, include_selection=include_sel, max_selection_chars=max_sel)
+            ctx = context_block(
+                snapshot, include_selection=include_sel, max_selection_chars=max_sel
+            )
             user = ctx + (f"\n\n{msg.text}" if msg.text else "")
 
     msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]

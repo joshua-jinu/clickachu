@@ -30,27 +30,6 @@ const GEMINI_FIELDS: {
   { key: 'base_url', label: 'Base URL', placeholder: GEMINI_DEFAULTS.base_url },
 ]
 
-const RECOMMENDED_MODELS = [
-  {
-    id: 'qwen2.5:3b',
-    label: 'Qwen 2.5 3B',
-    badge: 'Recommended',
-    desc: 'Best tool calling, reasoning & RAG for laptops (~1.9 GB)',
-  },
-  {
-    id: 'llama3.2:3b',
-    label: 'Llama 3.2 3B',
-    badge: 'Fast',
-    desc: 'Fast, lightweight, native tool calling (~2.0 GB)',
-  },
-  {
-    id: 'qwen2.5:1.5b',
-    label: 'Qwen 2.5 1.5B',
-    badge: 'Ultra-light',
-    desc: 'Lowest latency & memory for low-tier laptops (~1.0 GB)',
-  },
-]
-
 function SettingsForm() {
   const connection = useStore((s) => s.connection)
   const [form, setForm] = useState<Settings | null>(null)
@@ -70,6 +49,7 @@ function SettingsForm() {
       const res = await api.getOllamaStatus()
       if (res.running) {
         setOllamaStatus(res)
+        setCheckingOllama(false)
         return
       }
     } catch {
@@ -85,6 +65,7 @@ function SettingsForm() {
           size: m.size || 0,
         }))
         setOllamaStatus({ running: true, models })
+        setCheckingOllama(false)
         return
       }
     } catch {
@@ -313,61 +294,35 @@ function SettingsForm() {
             </div>
           </div>
 
-          {/* Low/Mid-tier Laptop Optimization Recommendation */}
-          <div className="rounded border border-purple-500/20 bg-black/40 p-2.5 text-xs">
-            <div className="flex items-center gap-1.5 font-medium text-purple-200">
-              <span>⚡</span>
-              <span>Laptop Optimization Guide (Zero Lag):</span>
-            </div>
-            <p className="mt-1 text-[11px] leading-relaxed text-purple-200/80">
-              For low or mid-tier laptops, 3B models offer instant responses, smart thinking, native
-              tool calling, and RAG without taxing your CPU/RAM (~2 GB usage). For older 8GB-RAM laptops,
-              select 1.5B (~1 GB usage).
-            </p>
-            <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-              {RECOMMENDED_MODELS.map((m) => {
-                const isSelected = form.ollama_model === m.id
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setForm({ ...form, ollama_model: m.id })}
-                    className={`flex flex-col items-start rounded border p-2 text-left transition-colors ${
-                      isSelected
-                        ? 'border-purple-400 bg-purple-600/30 text-white'
-                        : 'border-white/10 bg-white/5 text-ck-muted hover:border-white/20 hover:text-ck-text'
-                    }`}
-                  >
-                    <div className="flex w-full items-center justify-between">
-                      <span className="font-semibold text-xs text-ck-text">{m.label}</span>
-                      <span className="rounded bg-white/10 px-1 py-0.2 text-[9px] text-purple-300">
-                        {m.badge}
-                      </span>
-                    </div>
-                    <span className="mt-1 text-[10px] leading-tight text-ck-muted">{m.desc}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Installed Ollama Models Selector */}
-          {ollamaStatus.running && ollamaStatus.models.length > 0 && (
-            <label className="block text-xs text-ck-muted">
-              Select from installed Ollama models
-              <select
-                value={form.ollama_model}
-                onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
-                className={inputClass}
-              >
-                {ollamaStatus.models.map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {m.name} {m.size > 0 ? `(${(m.size / 1e9).toFixed(1)} GB)` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          {/* All downloaded models are selectable, including custom names and tags. */}
+          <label className="block text-xs text-ck-muted">
+            Downloaded Ollama models
+            <select
+              value={form.ollama_model}
+              onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
+              className={inputClass}
+              disabled={checkingOllama || ollamaStatus.models.length === 0}
+            >
+              {!ollamaStatus.models.some((m) => m.name === form.ollama_model) && (
+                <option value={form.ollama_model}>
+                  {form.ollama_model || 'Select a model'}
+                  {form.ollama_model ? ' (not detected)' : ''}
+                </option>
+              )}
+              {ollamaStatus.models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name} {m.size > 0 ? `(${(m.size / 1e9).toFixed(1)} GB)` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-[11px] text-ck-muted">
+            {ollamaStatus.models.length > 0
+              ? 'Choose any downloaded model, then click Save to use it for local requests.'
+              : ollamaStatus.running
+                ? 'No downloaded models found. Download a model in Ollama, then click Refresh.'
+                : 'Start Ollama, then click Refresh to detect downloaded models.'}
+          </p>
 
           {/* Model Name Input */}
           <label className="block text-xs text-ck-muted">
