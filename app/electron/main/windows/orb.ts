@@ -1,0 +1,204 @@
+/**
+ * Orb window (PLAN §9.1): 120×120 transparent, click-through except over the sphere (the renderer
+ * toggles that), dragged by main following the cursor, snapped to the nearest work-area edge on
+ * release and persisted in electron-store.
+ */
+import { BrowserWindow, type Rectangle, screen } from 'electron'
+import type { OrbDragPhase } from '../../../src/shared/bridge'
+import { type Point, prefs } from '../store'
+import { loadPage, secureWebPreferences } from './common'
+
+const SIZE = 120
+const HIT_RADIUS = 48
+const EDGE_MARGIN = 12
+const HIT_POLL_MS = 40
+
+let win: BrowserWindow | null = null
+/** Cursor offset from the window's top-left while dragging. */
+let dragOffset: Point | null = null
+let ignoringMouse = true
+let hitPollTimer: ReturnType<typeof setInterval> | null = null
+
+export function orbWindow(): BrowserWindow | null {
+  return win
+}
+
+function isCursorOverInteractive(): boolean {
+  if (!win || !win.isVisible()) return false
+  if (dragOffset) return true
+  const cursor = screen.getCursorScreenPoint()
+  const b = win.getBounds()
+  const lx = cursor.x - b.x
+  const ly = cursor.y - b.y
+  if (lx < 0 || ly < 0 || lx > b.width || ly > b.height) return false
+  const orbCenterX = b.width - SIZE / 2
+  const orbCenterY = SIZE / 2
+  const overOrb = Math.hypot(lx - orbCenterX, ly - orbCenterY) <= HIT_RADIUS
+  const overBubble =
+    b.width > SIZE && lx >= 8 && lx <= b.width - SIZE - 12 && ly >= 12 && ly <= 108
+  return overOrb || overBubble
+}
+
+function applyIgnoreMouse(ignore: boolean): void {
+  if (!win || ignoringMouse === ignore) return
+  ignoringMouse = ignore
+  if (ignore) {
+    win.setIgnoreMouseEvents(true, { forward: true })
+  } else {
+    win.setIgnoreMouseEvents(false)
+  }
+}
+
+export function createOrbWindow(): BrowserWindow {
+  const pos = validPosition(prefs.get('orbPosition'))
+  win = new BrowserWindow({
+    x: pos.x,
+    y: pos.y,
+    width: SIZE,
+    height: SIZE,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: true,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    type: 'toolbar',
+    title: 'Clickachu orb',
+    webPreferences: secureWebPreferences(),
+  })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  ignoringMouse = true
+  win.setIgnoreMouseEvents(true, { forward: true })
+  // showInactive: never take focus from the user's app.
+  win.once('ready-to-show', () => win?.showInactive())
+
+  if (hitPollTimer) clearInterval(hitPollTimer)
+  hitPollTimer = setInterval(() => {
+    if (!win) return
+    applyIgnoreMouse(!isCursorOverInteractive())
+  }, HIT_POLL_MS)
+
+  win.on('closed', () => {
+    if (hitPollTimer) {
+      clearInterval(hitPollTimer)
+      hitPollTimer = null
+    }
+    win = null
+  })
+
+  // A monitor unplugged or rearranged can strand the orb off-screen.
+  const revalidate = (): void => {
+    if (!win) return
+    const b = win.getBounds()
+    const next = validPosition({ x: b.x, y: b.y })
+    if (next.x !== b.x || next.y !== b.y) moveTo(next, true)
+  }
+  screen.on('display-removed', revalidate)
+  screen.on('display-metrics-changed', revalidate)
+  win.on('closed', () => {
+    screen.off('display-removed', revalidate)
+    screen.off('display-metrics-changed', revalidate)
+  })
+
+  loadPage(win, 'orb')
+  return win
+}
+
+export function setOrbClickThrough(enabled: boolean): void {
+  // While dragging the renderer must keep receiving events.
+  if (dragOffset && enabled) return
+  if (enabled && isCursorOverInteractive()) return
+  applyIgnoreMouse(enabled)
+}
+
+const EXPANDED_WIDTH = 340
+
+export function setOrbExpanded(expanded: boolean): void {
+  if (!win) return
+  const b = win.getBounds()
+  const display = screen.getDisplayMatching(b)
+  const onRight = b.x + SIZE / 2 > display.workArea.x + display.workArea.width / 2
+  if (expanded) {
+    if (b.width === SIZE) {
+      const newX = onRight ? b.x - (EXPANDED_WIDTH - SIZE) : b.x
+      win.setBounds({ x: newX, y: b.y, width: EXPANDED_WIDTH, height: SIZE })
+    }
+  } else {
+    if (b.width === EXPANDED_WIDTH) {
+      const newX = onRight ? b.x + (EXPANDED_WIDTH - SIZE) : b.x
+      win.setBounds({ x: newX, y: b.y, width: SIZE, height: SIZE })
+    }
+  }
+}
+
+export function orbDrag(phase: OrbDragPhase): void {
+  if (!win) return
+  const cursor = screen.getCursorScreenPoint()
+  if (phase === 'start') {
+    const b = win.getBounds()
+    dragOffset = { x: cursor.x - b.x, y: cursor.y - b.y }
+    applyIgnoreMouse(false)
+  } else if (phase === 'move' && dragOffset) {
+    moveTo({ x: cursor.x - dragOffset.x, y: cursor.y - dragOffset.y }, false)
+  } else if (phase === 'end' && dragOffset) {
+    dragOffset = null
+    const b = win.getBounds()
+    moveTo(snapToEdge(b, screen.getDisplayMatching(b).workArea), true)
+  }
+}
+
+function moveTo(p: Point, persist: boolean): void {
+  if (!win) return
+  // setBounds rather than setPosition: keeps the size exact on mixed-DPI setups.
+  win.setBounds({ x: Math.round(p.x), y: Math.round(p.y), width: SIZE, height: SIZE })
+  if (persist) prefs.set('orbPosition', { x: Math.round(p.x), y: Math.round(p.y) })
+}
+
+function clampToArea(p: Point, area: Rectangle): Point {
+  return {
+    x: Math.min(Math.max(p.x, area.x + EDGE_MARGIN), area.x + area.width - SIZE - EDGE_MARGIN),
+    y: Math.min(Math.max(p.y, area.y + EDGE_MARGIN), area.y + area.height - SIZE - EDGE_MARGIN),
+  }
+}
+
+/** Move to whichever work-area edge is closest, EDGE_MARGIN px in from it. */
+function snapToEdge(b: Rectangle, area: Rectangle): Point {
+  const p = clampToArea(b, area)
+  const dist = {
+    left: p.x - area.x,
+    right: area.x + area.width - (p.x + SIZE),
+    top: p.y - area.y,
+    bottom: area.y + area.height - (p.y + SIZE),
+  }
+  const nearest = (Object.keys(dist) as (keyof typeof dist)[]).reduce((a, k) =>
+    dist[k] < dist[a] ? k : a,
+  )
+  if (nearest === 'left') p.x = area.x + EDGE_MARGIN
+  if (nearest === 'right') p.x = area.x + area.width - SIZE - EDGE_MARGIN
+  if (nearest === 'top') p.y = area.y + EDGE_MARGIN
+  if (nearest === 'bottom') p.y = area.y + area.height - SIZE - EDGE_MARGIN
+  return p
+}
+
+function contains(area: Rectangle, p: Point): boolean {
+  return p.x >= area.x && p.x < area.x + area.width && p.y >= area.y && p.y < area.y + area.height
+}
+
+/** The saved position if its centre is on a connected display, else the primary's right edge. */
+function validPosition(saved: Point | undefined): Point {
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    const centre = { x: saved.x + SIZE / 2, y: saved.y + SIZE / 2 }
+    const display = screen.getAllDisplays().find((d) => contains(d.workArea, centre))
+    if (display) return clampToArea(saved, display.workArea)
+  }
+  const area = screen.getPrimaryDisplay().workArea
+  return {
+    x: area.x + area.width - SIZE - EDGE_MARGIN,
+    y: Math.round(area.y + area.height * 0.6 - SIZE / 2),
+  }
+}
