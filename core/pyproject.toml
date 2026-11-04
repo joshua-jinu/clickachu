@@ -1,0 +1,51 @@
+[project]
+name = "clickachu"
+version = "0.1.0"
+description = "Clickachu Python core (FastAPI sidecar)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "openai",
+    "keyring",
+    "psutil",
+    "pywin32; sys_platform == 'win32'",
+    "comtypes; sys_platform == 'win32'",
+    "pywinauto; sys_platform == 'win32'",
+    "send2trash",
+    "playwright",
+    "faster-whisper",
+    "sounddevice",
+    "numpy",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "httpx",
+]
+
+[project.scripts]
+clickachu = "clickachu.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "E722", "BLE"]
