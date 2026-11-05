@@ -9,8 +9,6 @@
  * - Closing the bar never cancels a run: an in-flight run continues in the side panel.
  */
 import {
-  type KeyboardEvent,
-  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -31,13 +29,12 @@ import { speechEngine, splitVoiceAndTechnical } from '@shared/voiceSpeech'
 import { ws } from '@shared/ws'
 import { OrbScene, type OrbVisualState } from '../orb/orbScene'
 
-/** Window padding around the card so its glass shadow isn't clipped. */
-const WINDOW_PADDING = 12
+/** Vertical padding of the orb + composer layout (4px top and bottom). */
+const WINDOW_PADDING = 8
 const DEFAULT_MAX_HEIGHT = 520
-const HERO_ORB_SIZE = 132
-const HERO_ORB_RADIUS = 34
-/** Displayed orb size once a conversation is on screen, so the answer gets the room. */
-const COMPACT_ORB_SIZE = 72
+/** The grown orb beside the composer (same size the orb window used to expand to). */
+const HERO_ORB_SIZE = 130
+const HERO_ORB_RADIUS = 54
 
 interface Exchange {
   question: string
@@ -55,49 +52,6 @@ const CHIP_LABEL: Partial<Record<RunAction, string>> = {
 
 const isRunning = (run: RunState | undefined): boolean =>
   run === undefined || run.status === 'running'
-
-function AutoTextarea(props: {
-  value: string
-  onChange: (v: string) => void
-  onFocus?: () => void
-  onBlur?: () => void
-  onSubmit: () => void
-  placeholder: string
-  inputRef?: RefObject<HTMLTextAreaElement>
-  className?: string
-}) {
-  const local = useRef<HTMLTextAreaElement>(null)
-  const ref = props.inputRef ?? local
-
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`
-  }, [props.value, ref])
-
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      props.onSubmit()
-    }
-  }
-
-  return (
-    <textarea
-      ref={ref}
-      rows={1}
-      value={props.value}
-      onFocus={props.onFocus}
-      onBlur={props.onBlur}
-      onChange={(e) => props.onChange(e.target.value)}
-      onKeyDown={onKeyDown}
-      placeholder={props.placeholder}
-      spellCheck={false}
-      className={`w-full resize-none bg-transparent text-sm leading-6 text-ck-text outline-none placeholder:text-ck-muted/75 ${props.className ?? ''}`}
-    />
-  )
-}
 
 function SavedToast() {
   const saved = useStore((s) => s.lastSaved)
@@ -164,6 +118,8 @@ export function QuickBar() {
   const [isTypingFocus, setIsTypingFocus] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [voiceMuted, setVoiceMuted] = useState(() => speechEngine.isMuted())
+  /** Which side of the composer the orb sits on (it opens where the desktop orb was). */
+  const [side, setSide] = useState<'left' | 'right'>('left')
   /** The run whose summary is spoken aloud; survives the reset that follows a panel handoff. */
   const [voiceRunId, setVoiceRunId] = useState<string | null>(null)
 
@@ -179,7 +135,7 @@ export function QuickBar() {
   )
 
   const shellRef = useRef<HTMLDivElement>(null)
-  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const promptRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<OrbScene | null>(null)
 
@@ -454,8 +410,9 @@ export function QuickBar() {
   useEffect(
     () =>
       window.clickachu.onQuickBarShown(
-        ({ maxHeight: mh, context: captured, initialAction, isListening: listening }) => {
+        ({ maxHeight: mh, context: captured, initialAction, isListening: listening, side: s }) => {
           setMaxHeight(mh)
+          setSide(s ?? 'left')
           if (!runningRef.current) {
             setContext(captured)
             setSelectionDropped(false)
@@ -779,211 +736,199 @@ export function QuickBar() {
             : lastRun?.activity || 'Generating response…'
         : prompt.trim().length > 0
           ? 'Press Enter to send'
-          : 'Click the orb to speak, or type below'
+          : 'Ready · speak or type below'
 
   const showConversationalCaption =
     Boolean(last) && (Boolean(split.voiceSummary) || lastRun?.status === 'error')
-  const compactOrb = exchanges.length > 0
-  const orbDisplaySize = compactOrb ? COMPACT_ORB_SIZE : HERO_ORB_SIZE
+  const ledClass = isListening
+    ? 'is-listening'
+    : running
+      ? 'is-working'
+      : isSpeaking
+        ? 'is-speaking'
+        : ''
 
   return (
-    <div ref={shellRef} style={{ padding: WINDOW_PADDING }}>
-      <div
-        className="ck-glass relative flex flex-col overflow-hidden rounded-3xl"
-        style={{ maxHeight: maxHeight - WINDOW_PADDING * 2 }}
+    <div
+      ref={shellRef}
+      className={`ck-orb-voice-layer ck-orb-expanded-layout ${side === 'right' ? 'is-anchored-right' : ''}`}
+    >
+      {/* The orb, grown beside the composer; click to toggle the mic */}
+      <button
+        type="button"
+        onClick={toggleMic}
+        title={isListening ? 'Listening — click to mute mic' : 'Click orb to speak'}
+        aria-label={isListening ? 'Stop listening' : 'Start listening'}
+        className={`ck-orb-expanded-visual ${isListening ? 'is-listening' : ''}`}
       >
-        {/* Header: always visible, never scrolls away */}
-        <div className="flex w-full shrink-0 items-center justify-between gap-2 px-4 pt-3 pb-1.5">
-          <div className="min-w-0 flex-1">
-            {context?.app || hasSelection ? (
-              <ContextChip
-                context={context}
-                dropped={selectionDropped}
-                expanded={showSelection}
-                onToggle={() => setShowSelection((v) => !v)}
-                onDrop={() => {
-                  setSelectionDropped(true)
-                  setShowSelection(false)
-                  useStore.setState({ activeContextId: null })
-                }}
-              />
-            ) : (
-              <span className="text-[11px] font-medium tracking-wide text-ck-muted/70">
-                Clickachu
-              </span>
-            )}
-          </div>
+        <span className="ck-orb-grown">
+          <canvas
+            ref={canvasRef}
+            width={HERO_ORB_SIZE}
+            height={HERO_ORB_SIZE}
+            className="pointer-events-none"
+            style={{ width: HERO_ORB_SIZE, height: HERO_ORB_SIZE }}
+          />
+        </span>
+      </button>
 
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={toggleVoiceMute}
-              title={voiceMuted ? 'Voice responses muted (click to unmute)' : 'Voice responses on'}
-              className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition-colors ${
-                voiceMuted
-                  ? 'border-white/10 bg-white/5 text-ck-muted hover:text-ck-text'
-                  : 'border-ck-violet/35 bg-ck-violet/15 text-ck-text hover:bg-ck-violet/25'
-              }`}
-            >
-              {voiceMuted ? '🔇' : '🔊'}
-            </button>
-            <button
-              type="button"
-              onClick={openPanelWithSelection}
-              title="Open in Side Panel (Ctrl+Alt+P toggles panel)"
-              className="flex h-7 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-ck-muted transition-colors hover:border-white/20 hover:text-ck-text"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-4 w-4"
-                aria-hidden="true"
-              >
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="M14 4v16M6 8h5M6 12h5M6 16h5" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={closeHud}
-              title="Close (Esc)"
-              aria-label="Close"
-              className="flex h-7 w-7 items-center justify-center rounded-full text-xs text-ck-muted transition-colors hover:bg-white/10 hover:text-ck-text"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-
-        {/* Body: scrolls when the answer is long, so header and input stay reachable */}
-        <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-5 pb-2">
-          {connection !== 'connected' && (
-            <ReconnectingBanner
-              status={connection}
-              detail={connectionDetail}
-              className="w-full shrink-0 rounded-xl"
-            />
-          )}
-
-          {showSelection && context && (
-            <div className="w-full shrink-0">
-              <SelectionPreview context={context} />
+      <div className="ck-orb-expanded-composer">
+        <div
+          className="ck-glass ck-orb-composer-card"
+          style={{ maxHeight: maxHeight - WINDOW_PADDING }}
+        >
+          {/* Header: always visible, never scrolls away */}
+          <div className="flex w-full shrink-0 items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {context?.app || hasSelection ? (
+                <ContextChip
+                  context={context}
+                  dropped={selectionDropped}
+                  expanded={showSelection}
+                  onToggle={() => setShowSelection((v) => !v)}
+                  onDrop={() => {
+                    setSelectionDropped(true)
+                    setShowSelection(false)
+                    useStore.setState({ activeContextId: null })
+                  }}
+                />
+              ) : (
+                <span className="text-[11px] font-medium tracking-wide text-ck-muted/70">
+                  Clickachu
+                </span>
+              )}
             </div>
-          )}
 
-          <div className="flex shrink-0 flex-col items-center justify-center">
-            <button
-              type="button"
-              onClick={toggleMic}
-              title={isListening ? 'Listening — click to mute mic' : 'Click orb to speak'}
-              className="ck-orb-stage group relative flex items-center justify-center rounded-full outline-none transition-all duration-300 hover:scale-[1.03] active:scale-[0.98]"
-              style={{ width: orbDisplaySize + 24, height: orbDisplaySize + 24 }}
-            >
-              <span
-                className={`pointer-events-none absolute inset-1.5 rounded-full border transition-all duration-500 ${
-                  isListening
-                    ? 'animate-pulse border-cyan-400/40 shadow-[0_0_32px_rgba(63,224,255,0.28)]'
-                    : isSpeaking
-                      ? 'border-fuchsia-400/40 shadow-[0_0_32px_rgba(224,64,251,0.28)]'
-                      : running
-                        ? 'border-ck-violet/35 shadow-[0_0_24px_rgba(139,92,246,0.22)]'
-                        : 'border-white/[0.06] shadow-[0_0_20px_rgba(79,124,255,0.12)]'
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleVoiceMute}
+                title={voiceMuted ? 'Voice responses muted (click to unmute)' : 'Voice responses on'}
+                className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition-colors ${
+                  voiceMuted
+                    ? 'border-white/10 bg-white/5 text-ck-muted hover:text-ck-text'
+                    : 'border-ck-violet/35 bg-ck-violet/15 text-ck-text hover:bg-ck-violet/25'
                 }`}
-              />
-              <canvas
-                ref={canvasRef}
-                width={HERO_ORB_SIZE}
-                height={HERO_ORB_SIZE}
-                className="pointer-events-none relative z-10 transition-all duration-300"
-                style={{ width: orbDisplaySize, height: orbDisplaySize }}
-              />
-            </button>
+              >
+                {voiceMuted ? '🔇' : '🔊'}
+              </button>
+              <button
+                type="button"
+                onClick={openPanelWithSelection}
+                title="Open in Side Panel (Ctrl+Alt+P toggles panel)"
+                className="flex h-7 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-ck-muted transition-colors hover:border-white/20 hover:text-ck-text"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M14 4v16M6 8h5M6 12h5M6 16h5" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={closeHud}
+                title="Close (Esc)"
+                aria-label="Close"
+                className="flex h-7 w-7 items-center justify-center rounded-full text-xs text-ck-muted transition-colors hover:bg-white/10 hover:text-ck-text"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
 
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-ck-muted" aria-live="polite">
-              <span
-                className={`h-1.5 w-1.5 rounded-full transition-colors ${
-                  isListening
-                    ? 'animate-ping bg-cyan-400'
-                    : isSpeaking
-                      ? 'bg-fuchsia-400'
-                      : running
-                        ? 'bg-ck-violet'
-                        : 'bg-white/30'
-                }`}
+          {/* Body: scrolls when the answer is long, so header and input stay reachable */}
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto">
+            {connection !== 'connected' && (
+              <ReconnectingBanner
+                status={connection}
+                detail={connectionDetail}
+                className="w-full shrink-0 rounded-xl"
               />
-              <span className="font-medium tracking-tight">{statusLabel}</span>
+            )}
+
+            {showSelection && context && (
+              <div className="w-full shrink-0">
+                <SelectionPreview context={context} />
+              </div>
+            )}
+
+            <div className="ck-inline-voice-state shrink-0" aria-live="polite">
+              <span className={`ck-inline-voice-led ${ledClass}`} />
+              <span className="min-w-0 truncate">{statusLabel}</span>
               {last && <RunTimer runId={last.runId} />}
             </div>
+
+            {lastRun && (
+              <div className="w-full shrink-0">
+                <RunDetails run={lastRun} />
+              </div>
+            )}
+            {showConversationalCaption && (
+              <div className="w-full shrink-0 space-y-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+                {last && (
+                  <p className="truncate text-[11px] font-medium text-ck-muted/80">{last.question}</p>
+                )}
+                {lastRun?.status === 'error' ? (
+                  <div className="space-y-1.5 text-xs text-red-300">
+                    <p>{lastRun.error}</p>
+                    {lastRun.error?.toLowerCase().includes('api key') && (
+                      <button
+                        type="button"
+                        onClick={() => window.clickachu.openSettings()}
+                        className="rounded-full bg-ck-violet px-3 py-1 text-xs font-medium text-white hover:bg-ck-violet/85"
+                      >
+                        Open Settings →
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm leading-relaxed text-ck-text">{split.voiceSummary}</p>
+                )}
+
+                {!running && answerText && !split.hasTechnicalDetails && (
+                  <div className="flex pt-1">
+                    <ResultActions
+                      text={split.cleanMarkdown || answerText}
+                      canReplace={canReplace}
+                      canInsert={canInsert}
+                      busy={applying}
+                      onReplace={() => void applyResult('replace')}
+                      onInsert={() => void applyResult('insert')}
+                      onOpenInAssistant={openInAssistant}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Contextual action chips (only when text is selected) */}
+            {hasSelection && (
+              <div className="w-full shrink-0">
+                <ActionChips hasSelection={hasSelection} onAction={runAction} disabled={running} />
+              </div>
+            )}
+
+            {notice && <p className="shrink-0 text-xs text-amber-300">{notice}</p>}
+            <div className="w-full shrink-0 empty:hidden">
+              <SavedToast />
+            </div>
           </div>
 
-          {lastRun && (
-            <div className="w-full shrink-0">
-              <RunDetails run={lastRun} />
-            </div>
-          )}
-          {showConversationalCaption && (
-            <div className="w-full shrink-0 space-y-2 rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4 py-3 text-center">
-              {last && (
-                <p className="truncate text-[11px] font-medium text-ck-muted/80">{last.question}</p>
-              )}
-              {lastRun?.status === 'error' ? (
-                <div className="space-y-1.5 text-xs text-red-300">
-                  <p>{lastRun.error}</p>
-                  {lastRun.error?.toLowerCase().includes('api key') && (
-                    <button
-                      type="button"
-                      onClick={() => window.clickachu.openSettings()}
-                      className="rounded-full bg-ck-violet px-3 py-1 text-xs font-medium text-white hover:bg-ck-violet/85"
-                    >
-                      Open Settings →
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm leading-relaxed text-ck-text">{split.voiceSummary}</p>
-              )}
-
-              {!running && answerText && !split.hasTechnicalDetails && (
-                <div className="flex justify-center pt-1">
-                  <ResultActions
-                    text={split.cleanMarkdown || answerText}
-                    canReplace={canReplace}
-                    canInsert={canInsert}
-                    busy={applying}
-                    onReplace={() => void applyResult('replace')}
-                    onInsert={() => void applyResult('insert')}
-                    onOpenInAssistant={openInAssistant}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Contextual action chips (only when text is selected) */}
-          {hasSelection && (
-            <div className="w-full shrink-0">
-              <ActionChips hasSelection={hasSelection} onAction={runAction} disabled={running} />
-            </div>
-          )}
-
-          {notice && <p className="shrink-0 text-xs text-amber-300">{notice}</p>}
-          <div className="w-full shrink-0 empty:hidden">
-            <SavedToast />
-          </div>
-        </div>
-
-        {/* Input pill: pinned to the bottom */}
-        <div className="shrink-0 px-5 pt-1 pb-4">
-          <div className="ck-input-pill flex w-full items-end gap-2 rounded-2xl px-3 py-2">
+          {/* Single-line input pill: pinned to the bottom */}
+          <div className="ck-input-pill ck-inline-chat-bar flex w-full shrink-0 gap-2 rounded-2xl px-3">
             <button
               type="button"
               onClick={toggleMic}
               title={isListening ? 'Microphone is ON (click to mute)' : 'Turn microphone ON'}
-              className={`mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all ${
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all ${
                 isListening
                   ? 'bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-400/50 shadow-[0_0_12px_rgba(63,224,255,0.3)]'
                   : 'bg-white/[0.06] text-ck-muted hover:bg-white/10 hover:text-ck-text'
@@ -1018,28 +963,38 @@ export function QuickBar() {
             </button>
 
             {doMode && (
-              <span className="mb-1 shrink-0 rounded-full bg-ck-violet/25 px-2 py-0.5 text-[11px] font-medium text-violet-200">
+              <span className="shrink-0 rounded-full bg-ck-violet/25 px-2 py-0.5 text-[11px] font-medium text-violet-200">
                 Task
               </span>
             )}
 
             <div className="flex min-w-0 flex-1 items-center py-0.5">
-              <AutoTextarea
-                inputRef={promptRef}
+              <input
+                ref={promptRef}
+                type="text"
                 value={prompt}
                 onFocus={() => setIsTypingFocus(true)}
                 onBlur={() => setIsTypingFocus(false)}
-                onChange={onPromptChange}
-                onSubmit={sendPrompt}
+                onChange={(e) => onPromptChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.ctrlKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    sendPrompt()
+                  }
+                }}
                 placeholder={
                   isListening
-                    ? 'Listening… your words appear here'
+                    ? 'Speak now, or start typing...'
                     : doMode
-                      ? 'Describe a task to carry out…'
+                      ? 'Describe a task to carry out...'
                       : exchanges.length > 0
-                        ? 'Ask a follow-up, or click mic to speak…'
-                        : 'Message Clickachu…'
+                        ? 'Ask a follow-up...'
+                        : 'Message Clickachu...'
                 }
+                aria-label="Message Clickachu"
+                autoComplete="off"
+                spellCheck={false}
+                className="ck-inline-chat-text h-8 bg-transparent text-sm leading-5 text-ck-text outline-none placeholder:text-ck-muted/75"
               />
             </div>
 
@@ -1048,7 +1003,7 @@ export function QuickBar() {
                 type="button"
                 onClick={cancel}
                 title="Stop current run"
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-300 ring-1 ring-red-400/40 transition-colors hover:bg-red-500/30"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-300 ring-1 ring-red-400/40 transition-colors hover:bg-red-500/30"
               >
                 <span className="h-2.5 w-2.5 rounded-xs bg-current" />
               </button>
@@ -1058,7 +1013,7 @@ export function QuickBar() {
                 onClick={sendPrompt}
                 disabled={!prompt.trim()}
                 title="Send (Enter)"
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ck-violet text-white transition-all hover:bg-ck-violet/90 disabled:bg-white/[0.06] disabled:text-ck-muted/40"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ck-violet text-white transition-all hover:bg-ck-violet/90 disabled:bg-white/[0.06] disabled:text-ck-muted/40"
               >
                 <svg
                   viewBox="0 0 24 24"

@@ -21,6 +21,8 @@ export interface QuickBarShown {
   context: ContextSnapshot | null
   initialAction?: RunAction
   isListening?: boolean
+  /** Side the orb sits on, so it appears where the desktop orb was. */
+  side?: 'left' | 'right'
 }
 
 /** Payload when the quick bar hands an agent run or an Ask answer off to the side panel (§9.2, §9.3). */
