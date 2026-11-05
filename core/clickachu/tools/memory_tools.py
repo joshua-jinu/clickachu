@@ -175,7 +175,7 @@ class RememberTool(Tool[RememberArgs]):
         model = ""
         if ctx.settings is not None:
             s = ctx.settings
-            model = s.active_router_model or s.active_ask_model or s.active_agent_model
+            model = s.active_fast_model
 
         if ctx.provider is not None and model:
             judge: Judge = llm_judge(make_ask_json(ctx.provider, model, max_tokens=60))

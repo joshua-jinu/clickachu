@@ -50,7 +50,9 @@ def settings_store(db: Database) -> SettingsStore:
     store.update(
         # Unit tests opt into web lookup explicitly with a fake search tool, never real network.
         SettingsUpdate(
-            ask_model="test/ask-model", agent_model="test/agent-model", auto_web_lookup=False
+            router_model="test/fast-model",
+            agent_model="test/agent-model",
+            auto_web_lookup=False,
         )
     )
     return store

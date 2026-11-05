@@ -4,7 +4,7 @@
  * release and persisted in electron-store.
  */
 import { BrowserWindow, type Rectangle, screen } from 'electron'
-import { IPC_ORB_INTERFACE_LAYOUT, type OrbDragPhase } from '../../../src/shared/bridge'
+import type { OrbDragPhase } from '../../../src/shared/bridge'
 import { type Point, prefs } from '../store'
 import { loadPage, secureWebPreferences } from './common'
 
@@ -12,16 +12,12 @@ const SIZE = 120
 const HIT_RADIUS = 48
 const EDGE_MARGIN = 12
 const HIT_POLL_MS = 40
-const VOICE_WIDTH = 540
-const VOICE_HEIGHT = 250
 
 let win: BrowserWindow | null = null
 /** Cursor offset from the window's top-left while dragging. */
 let dragOffset: Point | null = null
 let ignoringMouse = true
 let hitPollTimer: ReturnType<typeof setInterval> | null = null
-let interfaceExpanded = false
-let compactAnchor: Point | null = null
 let workspaceBounds: Rectangle | null = null
 let boundsBeforeWorkspace: Rectangle | null = null
 
@@ -37,7 +33,6 @@ function isCursorOverInteractive(): boolean {
   const lx = cursor.x - b.x
   const ly = cursor.y - b.y
   if (lx < 0 || ly < 0 || lx > b.width || ly > b.height) return false
-  if (interfaceExpanded) return true
   const orbCenterX = b.width - SIZE / 2
   const orbCenterY = SIZE / 2
   const overOrb = Math.hypot(lx - orbCenterX, ly - orbCenterY) <= HIT_RADIUS
@@ -126,7 +121,7 @@ export function setOrbClickThrough(enabled: boolean): void {
 const EXPANDED_WIDTH = 340
 
 export function setOrbExpanded(expanded: boolean): void {
-  if (!win || interfaceExpanded) return
+  if (!win) return
   const b = win.getBounds()
   const display = screen.getDisplayMatching(b)
   const onRight = b.x + SIZE / 2 > display.workArea.x + display.workArea.width / 2
@@ -143,51 +138,6 @@ export function setOrbExpanded(expanded: boolean): void {
   }
 }
 
-/** Expand the existing orb window into the voice composer while preserving its compact anchor. */
-export function setOrbInterfaceExpanded(expanded: boolean): void {
-  if (!win || interfaceExpanded === expanded) return
-
-  if (expanded) {
-    const b = win.getBounds()
-    const display = screen.getDisplayMatching(b)
-    const area = availableArea(display.workArea)
-    const targetArea = area.width >= 360 ? area : display.workArea
-    compactAnchor = { x: b.x, y: b.y }
-
-    const width = Math.min(VOICE_WIDTH, Math.max(360, targetArea.width - EDGE_MARGIN * 2))
-    const height = Math.min(VOICE_HEIGHT, Math.max(220, targetArea.height - EDGE_MARGIN * 2))
-    const onRight = b.x + SIZE / 2 >= targetArea.x + targetArea.width / 2
-    const side = onRight ? 'right' : 'left'
-    const x = onRight ? b.x + SIZE / 2 + 96 - width : b.x + SIZE / 2 - 96
-    const y = b.y + Math.round((SIZE - height) / 2)
-    const next = clampBounds({ x, y, width, height }, targetArea)
-
-    interfaceExpanded = true
-    win.setBounds(next, true)
-    win.setAlwaysOnTop(true, 'screen-saver')
-    applyIgnoreMouse(false)
-    win.focus()
-    win.webContents.send(IPC_ORB_INTERFACE_LAYOUT, { expanded: true, side })
-    return
-  }
-
-  const b = win.getBounds()
-  const display = screen.getDisplayMatching(b)
-  const area = availableArea(display.workArea)
-  const anchor = compactAnchor ?? {
-    x: b.x + (b.width > SIZE ? b.width - SIZE : 0),
-    y: b.y + (b.height > SIZE ? b.height - SIZE : 0),
-  }
-  const targetArea = area.width >= SIZE ? area : display.workArea
-  const next = clampBounds({ x: anchor.x, y: anchor.y, width: SIZE, height: SIZE }, targetArea)
-  interfaceExpanded = false
-  compactAnchor = null
-  setOrbExpanded(false)
-  win.setBounds(next, true)
-  applyIgnoreMouse(!isCursorInside(next))
-  win.webContents.send(IPC_ORB_INTERFACE_LAYOUT, { expanded: false })
-}
-
 /** Dock the compact orb beside the assistant workspace without changing its saved home position. */
 export function positionOrbForWorkspace(bounds: Rectangle): void {
   if (!win) return
@@ -195,16 +145,6 @@ export function positionOrbForWorkspace(bounds: Rectangle): void {
   workspaceBounds = bounds
   const area = screen.getDisplayMatching(bounds).workArea
   const available = availableArea(area)
-  if (interfaceExpanded) {
-    const current = win.getBounds()
-    const targetArea = available.width >= 360 ? available : area
-    const next = clampBounds(current, targetArea)
-    win.setBounds(next, true)
-    const anchor = compactAnchor ?? { x: next.x, y: next.y }
-    const side = anchor.x + SIZE / 2 >= area.x + area.width / 2 ? 'right' : 'left'
-    win.webContents.send(IPC_ORB_INTERFACE_LAYOUT, { expanded: true, side })
-    return
-  }
   const targetArea = available.width >= SIZE ? available : area
   const next = clampBounds(
     {
@@ -227,17 +167,6 @@ export function restoreOrbAfterWorkspace(): void {
   workspaceBounds = null
   const previous = boundsBeforeWorkspace
   boundsBeforeWorkspace = null
-  if (interfaceExpanded) {
-    const area = screen.getDisplayMatching(previous).workArea
-    const next = clampBounds(previous, area)
-    win.setBounds(next, true)
-    if (compactAnchor) {
-      compactAnchor = clampToArea(compactAnchor, area)
-      const side = compactAnchor.x + SIZE / 2 >= area.x + area.width / 2 ? 'right' : 'left'
-      win.webContents.send(IPC_ORB_INTERFACE_LAYOUT, { expanded: true, side })
-    }
-    return
-  }
   const saved = prefs.get('orbPosition') ?? { x: previous.x, y: previous.y }
   moveTo(validPosition(saved), true)
 }
@@ -252,33 +181,13 @@ export function orbDrag(phase: OrbDragPhase): void {
   } else if (phase === 'move' && dragOffset) {
     const next = { x: cursor.x - dragOffset.x, y: cursor.y - dragOffset.y }
     moveTo(next, false)
-    if (interfaceExpanded) {
-      const b = win.getBounds()
-      const area = availableArea(screen.getDisplayMatching(b).workArea)
-      const onRight = compactAnchor
-        ? compactAnchor.x + SIZE / 2 >= area.x + area.width / 2
-        : true
-      compactAnchor = {
-        x: onRight ? b.x + b.width - SIZE : b.x,
-        y: b.y,
-      }
-    }
   } else if (phase === 'end' && dragOffset) {
     dragOffset = null
     const b = win.getBounds()
     const area = availableArea(screen.getDisplayMatching(b).workArea)
     const snapped = snapToEdge(b, area)
     moveTo(snapped, false)
-    if (interfaceExpanded) {
-      const onRight = snapped.x + b.width / 2 >= area.x + area.width / 2
-      compactAnchor = {
-        x: onRight ? snapped.x + b.width - SIZE : snapped.x,
-        y: snapped.y,
-      }
-      prefs.set('orbPosition', { x: compactAnchor.x, y: compactAnchor.y })
-    } else {
-      prefs.set('orbPosition', { x: snapped.x, y: snapped.y })
-    }
+    prefs.set('orbPosition', { x: snapped.x, y: snapped.y })
     if (workspaceBounds) boundsBeforeWorkspace = win.getBounds()
   }
 }
@@ -313,14 +222,6 @@ function clampBounds(bounds: Rectangle, area: Rectangle): Rectangle {
     width,
     height,
   }
-}
-
-function isCursorInside(bounds: Rectangle): boolean {
-  const cursor = screen.getCursorScreenPoint()
-  return (
-    cursor.x >= bounds.x && cursor.x < bounds.x + bounds.width &&
-    cursor.y >= bounds.y && cursor.y < bounds.y + bounds.height
-  )
 }
 
 function clampToArea(p: Point, area: Rectangle): Point {

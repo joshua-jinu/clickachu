@@ -517,6 +517,8 @@ class Orchestrator:
         is_ollama = settings.provider == "ollama" or getattr(provider, "_is_ollama", False)
         history = self._load_history(conversation_id, limit=4 if is_ollama else 10)
         self._start_conversation(conversation_id, snapshot, msg.text)
+        tier = settings.ask_tier(msg.action)
+        model = settings.model_for(tier)
 
         parts: list[str] = []
         usage = Usage()
@@ -530,15 +532,13 @@ class Orchestrator:
                 saved,
                 agent=False,
                 is_ollama=is_ollama,
-                model_name=settings.active_ask_model,
+                model_name=model,
                 history=history,
             )
             if settings.debug_log_prompts:
                 prompt = json.dumps(messages, ensure_ascii=False)
                 log.info("outgoing prompt for run %s: %s", msg.run_id, prompt)
-            async for event in provider.stream(
-                settings.active_ask_model, messages, max_tokens=ASK_MAX_TOKENS
-            ):
+            async for event in provider.stream(model, messages, max_tokens=ASK_MAX_TOKENS):
                 if isinstance(event, TextDelta):
                     parts.append(event.text)
                     await self._emit(TokenEvent(run_id=msg.run_id, delta=event.text))
@@ -567,9 +567,10 @@ class Orchestrator:
         answer = "".join(parts)
         self._record_message(conversation_id, "assistant", answer)
         log.info(
-            "run %s done: model=%s in=%d out=%d cost=$%.6f",
+            "run %s done: model=%s (%s) in=%d out=%d cost=$%.6f",
             msg.run_id,
-            settings.active_ask_model,
+            model,
+            tier,
             usage.input_tokens,
             usage.output_tokens,
             usage.cost_usd,
@@ -1946,8 +1947,8 @@ class Orchestrator:
         if is_remember_request(msg.text):
             outcome = await self._memory.remember(
                 provider,
-                ask_model=settings.active_ask_model or settings.active_agent_model,
-                router_model=settings.active_router_model,
+                ask_model=settings.active_fast_model,
+                router_model=settings.active_fast_model,
                 user_text=msg.text,
                 project=project,
                 process=process,

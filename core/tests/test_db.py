@@ -119,4 +119,24 @@ def test_openrouter_settings_migrate_to_gemini_once(db: Database) -> None:
     assert loaded.base_url == "https://generativelanguage.googleapis.com/v1beta/openai/"
     assert loaded.router_model == "gemini-2.5-flash-lite"
     assert loaded.ask_model == "gemini-2.5-flash"
-    assert loaded.agent_model == "gemini-2.5-flash"
+    assert loaded.agent_model == "gemini-2.5-pro"
+
+
+def test_model_tiers_share_one_provider() -> None:
+    gemini = Settings(router_model="fast-g", agent_model="think-g")
+    assert gemini.model_for("thinking") == "think-g"
+    assert gemini.model_for("fast") == "fast-g"
+    assert gemini.active_router_model == "fast-g"
+    assert gemini.active_ask_model == gemini.active_agent_model == "think-g"
+    assert gemini.ask_tier("summarise") == "fast"
+    assert gemini.ask_tier("translate") == "fast"
+    assert gemini.ask_tier("rewrite") == "fast"
+    assert gemini.ask_tier("explain") == "thinking"
+    assert gemini.ask_tier(None) == "thinking"
+
+    ollama = Settings(provider="ollama", ollama_model="big", ollama_summary_model="small")
+    assert ollama.model_for("thinking") == "big"
+    assert ollama.model_for("fast") == "small"
+    # No fast model configured: fall back to the thinking model.
+    assert Settings(provider="ollama", ollama_model="big").model_for("fast") == "big"
+    assert Settings(router_model=" ", agent_model="think-g").model_for("fast") == "think-g"

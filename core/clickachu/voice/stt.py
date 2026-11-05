@@ -1,4 +1,9 @@
-"""Speech-to-text with faster-whisper, sounddevice, and adaptive auto-stop (PLAN §17)."""
+"""Speech-to-text with faster-whisper, sounddevice, and adaptive auto-stop (PLAN §17).
+
+While recording, a background thread re-transcribes the audio so far every PARTIAL_INTERVAL_S and
+emits `voice.partial` so the UI can show the words as they are spoken; the final pass on stop
+uses a wider beam and emits/returns the definitive transcript.
+"""
 
 import asyncio
 import logging
@@ -16,6 +21,11 @@ SAMPLE_RATE = 16000
 BLOCK_SIZE = 1024  # 1024 / 16000 = 64 ms (~15.6 Hz)
 AUTO_STOP_SILENCE_S = 1.2
 MAX_RECORDING_S = 30.0
+PARTIAL_INTERVAL_S = 0.8
+# Don't bother transcribing a partial until there's this much audio.
+MIN_PARTIAL_AUDIO_S = 0.4
+FINAL_BEAM_SIZE = 5
+PARTIAL_BEAM_SIZE = 1
 
 
 class VoiceService:
@@ -47,6 +57,10 @@ class VoiceService:
         self._last_transcript = ""
         self._auto_stop_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Bumped on every start so a stale partial thread never emits into a new session.
+        self._session = 0
+        # One whisper pass at a time (partial passes yield to the final one).
+        self._transcribe_lock = threading.Lock()
 
     @property
     def model_status(self) -> str:
@@ -138,6 +152,8 @@ class VoiceService:
             self._start_time = self._clock()
             self._recording = True
             self._last_transcript = ""
+            self._session += 1
+            session = self._session
 
             try:
                 self._stream = sd.InputStream(
@@ -157,7 +173,48 @@ class VoiceService:
 
             self.emit({"type": "orb.state", "state": "listening"})
             log.info("started voice recording on device %r", dev_arg)
+            threading.Thread(
+                target=self._partial_loop,
+                args=(session,),
+                name="whisper-partial",
+                daemon=True,
+            ).start()
             return True
+
+    def _partial_loop(self, session: int) -> None:
+        seen = 0
+        while True:
+            time.sleep(PARTIAL_INTERVAL_S)
+            next_seen = self._partial_tick(session, seen)
+            if next_seen is None:
+                return
+            seen = next_seen
+
+    def _partial_tick(self, session: int, seen: int) -> int | None:
+        """Transcribe the audio so far and emit `voice.partial`.
+
+        Returns the chunk count consumed, or None once this recording session has ended.
+        """
+        with self._record_lock:
+            if not self._recording or self._session != session:
+                return None
+            if not self._speech_detected or len(self._audio_chunks) == seen:
+                return seen
+            chunks = list(self._audio_chunks)
+        audio = np.concatenate(chunks, axis=0)
+        if len(audio) < MIN_PARTIAL_AUDIO_S * SAMPLE_RATE:
+            return seen
+        text = self.transcribe(audio, beam_size=PARTIAL_BEAM_SIZE, wait_for_model=False)
+        with self._record_lock:
+            still_recording = self._recording and self._session == session
+        if not still_recording:
+            return None
+        if text:
+            try:
+                self.emit({"type": "voice.partial", "text": text})
+            except Exception as exc:  # noqa: BLE001
+                log.debug("error emitting voice partial: %s", exc)
+        return len(chunks)
 
     def _audio_callback(
         self,
@@ -216,10 +273,8 @@ class VoiceService:
             except Exception as exc:  # noqa: BLE001
                 log.warning("error emitting voice.done: %s", exc)
 
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(_do_stop)
-        else:
-            threading.Thread(target=_do_stop, daemon=True).start()
+        # Transcription blocks for a while, so never run it on the server's event loop.
+        threading.Thread(target=_do_stop, name="whisper-final", daemon=True).start()
 
     def stop_recording(self) -> str:
         """Stop recording and return transcribed text."""
@@ -254,9 +309,15 @@ class VoiceService:
         log.info("transcription result: %r", text)
         return text
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        # Wait up to 5 seconds if model is still loading
-        for _ in range(50):
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        *,
+        beam_size: int = FINAL_BEAM_SIZE,
+        wait_for_model: bool = True,
+    ) -> str:
+        # Wait up to 5 seconds if model is still loading (partials just skip instead)
+        for _ in range(50 if wait_for_model else 0):
             with self._load_lock:
                 if self._model is not None or self._model_status in ("error", "unloaded"):
                     break
@@ -273,8 +334,10 @@ class VoiceService:
             return ""
 
         try:
-            segments, _info = model.transcribe(audio, language="en", beam_size=5)
-            return " ".join(s.text.strip() for s in segments).strip()
+            with self._transcribe_lock:
+                segments, _info = model.transcribe(audio, language="en", beam_size=beam_size)
+                # faster-whisper decodes lazily; consume the generator inside the lock.
+                return " ".join(s.text.strip() for s in segments).strip()
         except Exception as exc:  # noqa: BLE001
             log.error("whisper transcription failed: %s", exc)
             return ""

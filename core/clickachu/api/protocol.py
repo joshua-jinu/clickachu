@@ -22,6 +22,11 @@ MemoryCategory = Literal["preference", "instruction", "fact"]
 
 
 LLMProviderType = Literal["gemini", "ollama"]
+# Two model tiers on the same provider: a capable "thinking" model for agent work and open
+# questions, and a small "fast" model for easy jobs (routing, summaries, rewrites, memory).
+ModelTier = Literal["thinking", "fast"]
+# Ask actions simple enough for the fast model.
+FAST_ACTIONS: frozenset[str] = frozenset({"summarise", "translate", "rewrite"})
 
 # ---------------------------------------------------------------- HTTP
 
@@ -34,7 +39,7 @@ class HealthResponse(BaseModel):
 DEFAULT_GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_ROUTER_MODEL: str = "gemini-2.5-flash-lite"
 DEFAULT_ASK_MODEL: str = "gemini-2.5-flash"
-DEFAULT_AGENT_MODEL: str = "gemini-2.5-flash"
+DEFAULT_AGENT_MODEL: str = "gemini-2.5-pro"
 
 DEFAULT_OLLAMA_BASE_URL: str = "http://127.0.0.1:11434/v1"
 DEFAULT_OLLAMA_MODEL: str = "llama3.2:3b"
@@ -68,15 +73,24 @@ class OllamaStatusResponse(BaseModel):
 
 
 class Settings(BaseModel):
-    """Model configuration (PLAN §5). Empty model IDs mean "not configured yet"."""
+    """Model configuration (PLAN §5). Empty model IDs mean "not configured yet".
+
+    Two tiers share one provider: `agent_model` / `ollama_model` is the thinking model and
+    `router_model` / `ollama_summary_model` the fast one. `ask_model` is kept for stored-settings
+    compatibility but is no longer used.
+    """
 
     provider: LLMProviderType = "gemini"
+    # Fast tier (Gemini).
     router_model: str = DEFAULT_ROUTER_MODEL
     ask_model: str = DEFAULT_ASK_MODEL
+    # Thinking tier (Gemini).
     agent_model: str = DEFAULT_AGENT_MODEL
     base_url: str = DEFAULT_GEMINI_BASE_URL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
+    # Thinking tier (Ollama).
     ollama_model: str = DEFAULT_OLLAMA_MODEL
+    # Fast tier (Ollama); empty means "use the thinking model".
     ollama_summary_model: str = ""
     ollama_cpu_only: bool = False
     translate_language: str = "English"
@@ -112,16 +126,33 @@ class Settings(BaseModel):
         return self.ollama_base_url if self.provider == "ollama" else self.base_url
 
     @property
+    def active_thinking_model(self) -> str:
+        return self.ollama_model if self.provider == "ollama" else self.agent_model
+
+    @property
+    def active_fast_model(self) -> str:
+        """The small model; falls back to the thinking model when none is configured."""
+        fast = self.ollama_summary_model if self.provider == "ollama" else self.router_model
+        return fast.strip() or self.active_thinking_model
+
+    def model_for(self, tier: ModelTier) -> str:
+        return self.active_fast_model if tier == "fast" else self.active_thinking_model
+
+    def ask_tier(self, action: str | None) -> ModelTier:
+        """Easy transformations go to the fast model; everything else gets the thinking model."""
+        return "fast" if action in FAST_ACTIONS else "thinking"
+
+    @property
     def active_router_model(self) -> str:
-        return self.ollama_model if self.provider == "ollama" else self.router_model
+        return self.active_fast_model
 
     @property
     def active_ask_model(self) -> str:
-        return self.ollama_model if self.provider == "ollama" else self.ask_model
+        return self.active_thinking_model
 
     @property
     def active_agent_model(self) -> str:
-        return self.ollama_model if self.provider == "ollama" else self.agent_model
+        return self.active_thinking_model
 
 
 class SettingsView(Settings):
@@ -516,6 +547,13 @@ class VoiceLevelEvent(BaseModel):
     rms: float
 
 
+class VoicePartialEvent(BaseModel):
+    """Interim transcript of the audio recorded so far (live captions while speaking)."""
+
+    type: Literal["voice.partial"] = "voice.partial"
+    text: str
+
+
 class VoiceDoneEvent(BaseModel):
     type: Literal["voice.done"] = "voice.done"
     text: str
@@ -535,6 +573,7 @@ ServerMessage = Annotated[
     | MemorySavedEvent
     | SuggestionEvent
     | VoiceLevelEvent
+    | VoicePartialEvent
     | VoiceDoneEvent,
     Field(discriminator="type"),
 ]

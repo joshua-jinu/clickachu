@@ -71,7 +71,7 @@ async def test_settings_roundtrip_and_secret_is_write_only(make_app: AppFactory)
         put = await client.put("/settings", headers=AUTH, json={"agent_model": "x/agent"})
         assert put.status_code == 200
         assert put.json()["agent_model"] == "x/agent"
-        assert put.json()["ask_model"] == "test/ask-model"
+        assert put.json()["router_model"] == "test/fast-model"
 
         secret = await client.put("/secrets/openrouter", headers=AUTH, json={"key": "sk-new"})
         assert secret.status_code == 204

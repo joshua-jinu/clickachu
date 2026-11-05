@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
@@ -12,6 +13,7 @@ from clickachu.api.protocol import (
     ClientMessage,
     ServerMessage,
     client_message_adapter,
+    server_message_adapter,
 )
 from clickachu.api.security import tokens_match
 
@@ -39,6 +41,39 @@ class Hub:
         self._connections: set[Connection] = set()
         self._handlers: dict[str, Handler] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """The server's event loop, so sync threads (mic, watchers) can broadcast via `emit`."""
+        self._loop = loop
+
+    def emit(self, message: dict[str, Any] | BaseModel) -> None:
+        """Sync, thread-safe broadcast for non-coroutine callers (audio callback, watchers).
+
+        Dicts are validated into the matching ServerMessage; anything invalid is dropped with a log.
+        """
+        try:
+            msg = (
+                message
+                if isinstance(message, BaseModel)
+                else server_message_adapter.validate_python(message)
+            )
+        except ValidationError as exc:
+            log.warning("dropping invalid server event: %s", exc.errors()[:1])
+            return
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            on_loop = False
+        if on_loop:
+            task = loop.create_task(self.broadcast(msg))  # type: ignore[arg-type]
+            self._tasks.add(task)
+            task.add_done_callback(self._task_done)
+        else:
+            asyncio.run_coroutine_threadsafe(self.broadcast(msg), loop)  # type: ignore[arg-type]
 
     def on(self, message_type: str, handler: Handler) -> None:
         self._handlers[message_type] = handler

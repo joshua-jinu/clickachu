@@ -84,7 +84,7 @@ def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
         key,
         settings.reasoning_effort,
         settings.ollama_cpu_only,
-        settings.ollama_summary_model,
+        settings.active_fast_model,
     )
     cached = _provider_cache.get(cache_key)
     if cached is not None:
@@ -94,7 +94,7 @@ def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
         api_key=key,
         reasoning_effort=settings.reasoning_effort,
         ollama_cpu_only=settings.ollama_cpu_only,
-        summary_model=settings.ollama_summary_model,
+        summary_model=settings.active_fast_model,
     )
     _provider_cache[cache_key] = prov
     return prov
@@ -151,7 +151,7 @@ def create_app(
         project_store=project_store,
         settings_store=settings,
         process_manager=get_process_manager(),
-        emit=hub.broadcast,
+        emit=hub.emit,
     )
 
     async def _handle_suggestion_respond(msg: dict[str, Any]) -> None:
@@ -162,13 +162,15 @@ def create_app(
 
     hub.on("suggestion.respond", _handle_suggestion_respond)
 
-    fs_watcher = fullscreen_watcher or FullscreenWatcher(emit=hub.broadcast)
-    vc_service = voice_service or VoiceService(models_dir=paths.models, emit=hub.broadcast)
+    # Watchers and the mic run on their own threads, so they use the thread-safe sync emitter.
+    fs_watcher = fullscreen_watcher or FullscreenWatcher(emit=hub.emit)
+    vc_service = voice_service or VoiceService(models_dir=paths.models, emit=hub.emit)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         server: uvicorn.Server | None = getattr(app.state, "server", None)
         announce = asyncio.create_task(_announce_ready(server, config.port)) if server else None
+        hub.bind_loop(asyncio.get_running_loop())
         suggestion_mgr.install()
         fs_watcher.start()
         try:

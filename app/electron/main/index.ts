@@ -8,7 +8,6 @@ import {
   IPC_ORB_CLICK_THROUGH,
   IPC_ORB_DRAG,
   IPC_ORB_EXPANDED,
-  IPC_ORB_INTERFACE_EXPANDED,
   IPC_PANEL_HIDE,
   IPC_PICK_FOLDER,
   IPC_QUICKBAR_HEIGHT,
@@ -19,6 +18,7 @@ import {
   IPC_VOICE_TRANSCRIPT,
   type OrbDragPhase,
   type PanelHandoff,
+  type QuickBarAnchor,
 } from '../../src/shared/bridge'
 import type { ContextSnapshot, RunAction, Settings, SettingsView } from '../../src/shared/protocol'
 import { captureContext, createOpenWithContext } from './capture'
@@ -33,7 +33,6 @@ import {
   orbWindow,
   setOrbClickThrough,
   setOrbExpanded,
-  setOrbInterfaceExpanded,
 } from './windows/orb'
 import {
   createPanelWindow,
@@ -173,19 +172,28 @@ function from(
 ipcMain.handle(IPC_BACKEND, () => sidecar.backend())
 ipcMain.on(
   IPC_OPEN_QUICKBAR,
-  (_e, payload?: { context?: ContextSnapshot | null; initialAction?: RunAction; isListening?: boolean }) => {
+  (
+    _e,
+    payload?: {
+      context?: ContextSnapshot | null
+      initialAction?: RunAction
+      isListening?: boolean
+      anchor?: QuickBarAnchor
+    },
+  ) => {
     void (async () => {
       let ctx = payload?.context ?? null
       if (!ctx && !quickBarWindow()?.isVisible()) {
         ctx = await captureContext(sidecar)
       }
+      const anchor: QuickBarAnchor = payload?.anchor === 'orb' ? 'orb' : 'center'
       if (payload?.isListening && currentSettings?.voice_enabled !== false) {
         const res = await sidecarRequest<{ ok: boolean }>('POST', '/voice/start')
         voiceRecording = Boolean(res?.ok)
-        openQuickBar(ctx, payload?.initialAction, voiceRecording || payload.isListening)
+        openQuickBar(ctx, payload?.initialAction, voiceRecording || payload.isListening, anchor)
         return
       }
-      openQuickBar(ctx, payload?.initialAction, payload?.isListening)
+      openQuickBar(ctx, payload?.initialAction, payload?.isListening, anchor)
     })()
   },
 )
@@ -229,10 +237,6 @@ ipcMain.on(
 ipcMain.on(
   IPC_ORB_EXPANDED,
   from(orbWindow, (_e, expanded) => setOrbExpanded(expanded === true)),
-)
-ipcMain.on(
-  IPC_ORB_INTERFACE_EXPANDED,
-  from(orbWindow, (_e, expanded) => setOrbInterfaceExpanded(expanded === true)),
 )
 ipcMain.on(
   IPC_ORB_DRAG,

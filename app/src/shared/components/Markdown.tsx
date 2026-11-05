@@ -26,7 +26,13 @@ function ScrollableTable({ node, ...props }: ComponentPropsWithoutRef<'table'> &
   return <div className="max-w-full overflow-x-auto"><table {...props} /></div>
 }
 
-const components = { pre: CodeBlock, table: ScrollableTable }
+/** Links open in the system browser (main process routes window.open to shell.openExternal). */
+function ExternalLink({ node, ...props }: ComponentPropsWithoutRef<'a'> & ExtraProps) {
+  void node
+  return <a {...props} target="_blank" rel="noreferrer" />
+}
+
+const components = { pre: CodeBlock, table: ScrollableTable, a: ExternalLink }
 const rehypePlugins: Options['rehypePlugins'] = [[rehypeHighlight, { detect: true }]]
 
 function extractThoughts(raw: string): { thoughts: string[]; content: string; isThinking: boolean } {

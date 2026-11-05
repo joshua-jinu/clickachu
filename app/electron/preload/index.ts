@@ -10,8 +10,6 @@ import {
   IPC_ORB_CLICK_THROUGH,
   IPC_ORB_DRAG,
   IPC_ORB_EXPANDED,
-  IPC_ORB_INTERFACE_EXPANDED,
-  IPC_ORB_INTERFACE_LAYOUT,
   IPC_PANEL_HANDOFF,
   IPC_PANEL_HIDE,
   IPC_PANEL_SHOWN,
@@ -30,8 +28,8 @@ import {
 const api: ClickachuBridge = {
   backend: () => ipcRenderer.invoke(IPC_BACKEND) as Promise<BackendInfo>,
 
-  openQuickBar: (context, initialAction, isListening) =>
-    ipcRenderer.send(IPC_OPEN_QUICKBAR, { context, initialAction, isListening }),
+  openQuickBar: (context, initialAction, isListening, anchor) =>
+    ipcRenderer.send(IPC_OPEN_QUICKBAR, { context, initialAction, isListening, anchor }),
   togglePanel: () => ipcRenderer.send(IPC_TOGGLE_PANEL),
   openSettings: () => ipcRenderer.send(IPC_OPEN_SETTINGS),
   openPanelInChat: (handoff) => ipcRenderer.send(IPC_OPEN_PANEL_CHAT, handoff),
@@ -55,12 +53,6 @@ const api: ClickachuBridge = {
 
   setClickThrough: (enabled) => ipcRenderer.send(IPC_ORB_CLICK_THROUGH, enabled),
   setOrbExpanded: (expanded) => ipcRenderer.send(IPC_ORB_EXPANDED, expanded),
-  setOrbInterfaceExpanded: (expanded) => ipcRenderer.send(IPC_ORB_INTERFACE_EXPANDED, expanded),
-  onOrbInterfaceLayout: (handler) => {
-    const listener = (_e: IpcRendererEvent, layout: { expanded: boolean; side?: 'left' | 'right' }): void => handler(layout)
-    ipcRenderer.on(IPC_ORB_INTERFACE_LAYOUT, listener)
-    return () => ipcRenderer.removeListener(IPC_ORB_INTERFACE_LAYOUT, listener)
-  },
   orbDrag: (phase) => ipcRenderer.send(IPC_ORB_DRAG, phase),
   showContextMenu: () => ipcRenderer.send(IPC_CONTEXT_MENU),
 

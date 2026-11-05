@@ -37,17 +37,20 @@ export interface PanelHandoff {
 }
 
 export type OrbDragPhase = 'start' | 'move' | 'end'
-export interface OrbInterfaceLayout {
-  expanded: boolean
-  side?: 'left' | 'right'
-}
+/** Where the quick bar opens: center stage (Alt+Q, tray) or next to the orb (orb click). */
+export type QuickBarAnchor = 'center' | 'orb'
 
 export interface ClickachuBridge {
   /** Resolves once the sidecar is READY; rejects if it gave up restarting. */
   backend(): Promise<BackendInfo>
 
   // ---- any window
-  openQuickBar(context?: ContextSnapshot | null, initialAction?: RunAction, isListening?: boolean): void
+  openQuickBar(
+    context?: ContextSnapshot | null,
+    initialAction?: RunAction,
+    isListening?: boolean,
+    anchor?: QuickBarAnchor,
+  ): void
   togglePanel(): void
   /** Show the side panel directly on the Settings tab. */
   openSettings(): void
@@ -68,10 +71,6 @@ export interface ClickachuBridge {
   // ---- orb (§9.1)
   setClickThrough(enabled: boolean): void
   setOrbExpanded(expanded: boolean): void
-  /** Resize the orb window to host its inline voice composer. */
-  setOrbInterfaceExpanded(expanded: boolean): void
-  /** Main sends the side used to keep the grown orb near its original position. */
-  onOrbInterfaceLayout(handler: (layout: OrbInterfaceLayout) => void): () => void
   /** Main reads the cursor itself, so no coordinates are passed. */
   orbDrag(phase: OrbDragPhase): void
   showContextMenu(): void
@@ -98,8 +97,6 @@ export const IPC_QUICKBAR_RUN_ACTIVE = 'clickachu:quickbar:run-active'
 export const IPC_QUICKBAR_SHOWN = 'clickachu:quickbar:shown'
 export const IPC_ORB_CLICK_THROUGH = 'clickachu:orb:click-through'
 export const IPC_ORB_EXPANDED = 'clickachu:orb:expanded'
-export const IPC_ORB_INTERFACE_EXPANDED = 'clickachu:orb:interface-expanded'
-export const IPC_ORB_INTERFACE_LAYOUT = 'clickachu:orb:interface-layout'
 export const IPC_ORB_DRAG = 'clickachu:orb:drag'
 export const IPC_CONTEXT_MENU = 'clickachu:context-menu'
 export const IPC_PICK_FOLDER = 'clickachu:pick-folder'

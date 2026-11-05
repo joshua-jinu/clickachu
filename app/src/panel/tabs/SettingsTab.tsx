@@ -10,8 +10,7 @@ import { AgentSettings } from './AgentSettings'
 
 const GEMINI_DEFAULTS = {
   router_model: 'gemini-2.5-flash-lite',
-  ask_model: 'gemini-2.5-flash',
-  agent_model: 'gemini-2.5-flash',
+  agent_model: 'gemini-2.5-pro',
   base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/',
 } as const
 
@@ -20,14 +19,22 @@ const OLLAMA_DEFAULTS = {
   ollama_base_url: 'http://127.0.0.1:11434/v1',
 } as const
 
+/** Two tiers on one provider: a capable thinking model and a small fast model for easy jobs. */
 const GEMINI_FIELDS: {
-  key: 'router_model' | 'ask_model' | 'agent_model' | 'base_url'
+  key: 'router_model' | 'agent_model' | 'base_url'
   label: string
   placeholder?: string
 }[] = [
-  { key: 'router_model', label: 'Router model', placeholder: GEMINI_DEFAULTS.router_model },
-  { key: 'ask_model', label: 'Ask model', placeholder: GEMINI_DEFAULTS.ask_model },
-  { key: 'agent_model', label: 'Agent model', placeholder: GEMINI_DEFAULTS.agent_model },
+  {
+    key: 'agent_model',
+    label: 'Thinking model (tasks, questions, explanations)',
+    placeholder: GEMINI_DEFAULTS.agent_model,
+  },
+  {
+    key: 'router_model',
+    label: 'Fast model (summaries, translation, rewrites, routing, memory)',
+    placeholder: GEMINI_DEFAULTS.router_model,
+  },
   { key: 'base_url', label: 'Base URL', placeholder: GEMINI_DEFAULTS.base_url },
 ]
 
@@ -139,7 +146,6 @@ function SettingsForm() {
       const view = await api.putSettings({
         provider: form.provider,
         router_model: form.router_model,
-        ask_model: form.ask_model,
         agent_model: form.agent_model,
         base_url: form.base_url,
         ollama_base_url: form.ollama_base_url,
@@ -309,7 +315,7 @@ function SettingsForm() {
 
           {/* All downloaded models are selectable, including custom names and tags. */}
           <label className="block text-xs text-ck-muted">
-            Downloaded Ollama models
+            Downloaded Ollama models (thinking model)
             <select
               value={form.ollama_model}
               onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
@@ -337,9 +343,9 @@ function SettingsForm() {
                 : 'Start Ollama, then click Refresh to detect downloaded models.'}
           </p>
 
-          {/* Model Name Input */}
+          {/* Model tiers */}
           <label className="block text-xs text-ck-muted">
-            Ollama model name (used for router, ask, and agent tools)
+            Thinking model (tasks, questions, explanations)
             <input
               value={form.ollama_model}
               onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
@@ -347,6 +353,22 @@ function SettingsForm() {
               placeholder={OLLAMA_DEFAULTS.ollama_model}
               spellCheck={false}
             />
+          </label>
+          <label className="block text-xs text-ck-muted">
+            Fast model (summaries, translation, rewrites, routing, memory) — optional
+            <input
+              value={form.ollama_summary_model}
+              onChange={(e) => setForm({ ...form, ollama_summary_model: e.target.value })}
+              className={inputClass}
+              placeholder="Use the thinking model"
+              spellCheck={false}
+              list="ck-ollama-models"
+            />
+            <datalist id="ck-ollama-models">
+              {ollamaStatus.models.map((m) => (
+                <option key={m.name} value={m.name} />
+              ))}
+            </datalist>
           </label>
 
           {/* Base URL */}

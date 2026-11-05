@@ -69,14 +69,17 @@ class OpenRouterProvider:
             "required": ["answer", "source_ids"],
             "additionalProperties": False,
         }
-        summary_model = getattr(self, "_summary_model", "") if self._is_ollama else ""
+        # Sourced summaries are an easy job: run them on the fast tier when one is configured.
+        summary_model = getattr(self, "_summary_model", "")
         return self.stream(
             summary_model or model,
             messages,
             max_tokens=max_tokens,
             response_schema=schema if self._is_ollama else None,
             json_mode=not self._is_ollama,
-            keep_alive=0 if summary_model and summary_model != model else None,
+            keep_alive=(
+                0 if self._is_ollama and summary_model and summary_model != model else None
+            ),
             temperature=0 if self._is_ollama else None,
         )
 
