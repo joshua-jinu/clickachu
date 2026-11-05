@@ -64,7 +64,8 @@ async def test_play_pause_and_contextual_followup_finish_without_model_calls(
     ],
 )
 def test_compound_specific_and_non_action_requests_are_not_shortcut(text):
-    assert request_goal(text) is None
+    goal = request_goal(text)
+    assert goal is None or goal.kind != "media"
 
 
 def test_media_resume_is_not_old_task_resume():

@@ -15,6 +15,11 @@ def ui_context(result, include_observation_id=True):
             previous = context
         lines.append(
             f"{entry['ref']} [{entry['type']}] {entry['text']}"
+            + (
+                f"; value={entry['value']}"
+                if entry.get("value") and entry["value"] != entry["text"]
+                else ""
+            )
             + (" (disabled)" if not entry.get("enabled", True) else "")
         )
     lines.extend([f"Window: {data.get('title', '')}", result.summary])

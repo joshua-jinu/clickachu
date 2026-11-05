@@ -211,7 +211,10 @@ def test_build_initial_messages_minimal_tokens_for_greetings() -> None:
     # Launching an unrelated app must not carry clipboard/document contents into inference.
     agent_messages = _build_initial_messages(
         RunMessage(run_id="run_3", text="open Example Player and play music"),
-        settings, snapshot, agent=True, is_ollama=True,
+        settings,
+        snapshot,
+        agent=True,
+        is_ollama=True,
     )
     assert "def some_code():" not in str(agent_messages)
     assert agent_messages[-1]["name"] == "current_task"
@@ -430,7 +433,13 @@ def test_agent_validation_stops_after_second_failure(make_app: AppFactory) -> No
 
 
 def test_agent_step_cap_stops_at_8_steps(make_app: AppFactory) -> None:
-    provider = FakeProvider([ToolCall("c_loop", "recall", '{"query": "pnpm"}'), Done()])
+    # Distinct reads exercise the step cap; unchanged repeats now stop earlier by design.
+    provider = QueueProvider(
+        [
+            [ToolCall(f"c_{i}", "recall", '{"query": "topic' + str(i) + '"}'), Done()]
+            for i in range(8)
+        ]
+    )
     app = make_app(provider=provider)
     with TestClient(app, base_url=BASE_URL, headers=AUTH) as client:
         client.put("/settings", json={"agent_max_steps": 8})

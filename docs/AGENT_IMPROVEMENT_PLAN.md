@@ -176,3 +176,66 @@ every phrasing or guarantee the local model obeys every recalled preference.
 Verification: 547 backend tests and six renderer/main-process UI regressions passed, plus the
 production frontend build, TypeScript checks, ESLint and targeted Python lint. Memory persistence
 and full selected-source answering were verified with fixtures, not a completed live model run.
+
+## Media selection, app grounding and repeat recovery (5 November)
+
+The supplied logs exposed several controller gaps rather than one missing UI library:
+
+- Bare `play`/`pause` bypassed the deterministic playback path, and `plsy` missed it entirely.
+  Clear short playback commands now use confirmed conversation media context. A unique one-edit
+  verb correction is allowed only in that context; song and app names are preserved literally.
+- Named content had no completion contract. A verified transport state for the old queue could
+  therefore be mistaken for success. Content requests now start the generic app/UI workflow,
+  exclude queue-resume controls from the model catalog, and require matching title, requested
+  artist and playing state from Windows media read-back. No app-specific Spotify search code
+  or song-name allowlist was added.
+- Discovery could return an empty success, while read tools were exempt from repeat checks.
+  Unmatched app names now expose general desktop capabilities. Duplicate discovery calls are
+  suppressed, and unchanged read evidence is detected across observation-ID changes. Reopening
+  an already opened app is also suppressed across intervening observations.
+- Fresh app requests carried unrelated action-result history. Explicit app launches now start
+  in the named app, omit unrelated prior tool history, reject unrequested app launches, and bind
+  native input to the observed process of the requested application when that identity is known.
+- Structured local action generation could inherit reasoning settings or publish malformed,
+  repetitive model output. Structured requests now disable thinking, suppress that action-only
+  trace, and abort bounded repetitive output before any action is dispatched. Ordinary answer
+  reasoning remains separate. Invalid/partial JSON is never executed.
+
+Fresh UI data alone did not solve the model's decision errors. In no-execution fixtures, the
+installed 4B local model still selected another observation, a wait, or reopening Chrome when the
+needed controls were already present. UI-step constraints now expose the applicable operation
+and observed refs when the next search/result operation is clear. Missing or ambiguous targets
+retain inspection and general navigation. Clickable rows can require activation rather than a
+single click; they are not automatically treated as successful playback or repeatedly forced.
+
+When exactly one search field or matching Play button is observed, the controller can execute
+that unambiguous operation without a model call, using the existing approval and stale-ref checks.
+The native-control fixture completed open → search → select → verified playback with zero model
+calls. This is a fixture result, not a claim that every real app exposes such controls. A brief
+bounded metadata wait handles track-switch propagation without repeatedly sending playback input.
+
+The inspector now retains named list/data-row ancestry and cached editor values. This associates
+a row's Play button with its title/artist and allows read-back of browser addresses. Password
+values remain excluded; no extra per-control COM query was introduced. Opening a browser alone,
+or displaying a search page/typed address, does not complete a compound destination request.
+Named destinations need resulting page evidence; explicit URLs need a matching address and a
+loaded document. A request naming two native apps still permits the second requested app.
+
+The final forced-model benchmark used 60-control synthetic states and executed no PC input:
+
+| Decision fixture | Selected expected next control | Model wall time |
+| --- | --- | --- |
+| Song search | Search field, requested title/artist, submit | 42.14 s |
+| Song result | Matching result's Play button | 25.95 s |
+| Browser navigation | Address field, submit website name | 23.14 s |
+| Browser search result | Matching destination link | 20.84 s |
+
+These demonstrate next-control selection, not end-to-end PC task completion. The first request
+included a cold model/prompt. CPU inference remains expensive when the deterministic UI path is
+inapplicable. A live PC check was stopped when computer-use detected user input, so no fresh live
+song-selection or full browser-navigation success is claimed for this pass.
+
+A duplicate-instance startup issue was also corrected: a secondary process now exits immediately
+and its activation event opens the existing HUD without implicitly enabling the microphone.
+The old idle development app/sidecar was restarted so Python changes can take effect. The current
+design still requires a restart for backend code updates; renderer hot reload alone is insufficient.

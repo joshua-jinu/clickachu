@@ -39,9 +39,27 @@ class DiscoverToolsTool(Tool[DiscoverToolsArgs]):
             if score:
                 ranked.append((score, tool.name))
         names = [name for _, name in sorted(ranked, key=lambda pair: -pair[0])[:8]]
+        matched = bool(names)
+        if not names:
+            # App names need not occur in generic tool descriptions. Expose the computer
+            # workflow instead of pretending an empty discovery advanced the user's task.
+            names = [
+                name
+                for name in ("open_app", "observe_desktop", "desktop_action", "wait_for_ui")
+                if self.registry.get(name)
+            ]
         schemas = self.registry.schemas(names=names)
         return ToolResult(
-            ok=True,
-            summary=f"Loaded {len(names)} capabilities: {', '.join(names)}",
-            data={"schemas": schemas},
+            ok=bool(names),
+            summary=(
+                f"Loaded {len(names)} capabilities: {', '.join(names)}"
+                if matched
+                else f"No named capability matched {args.query!r}. "
+                + (
+                    f"Use the general desktop tools: {', '.join(names)}."
+                    if names
+                    else "No applicable capability is available; do not repeat this query."
+                )
+            ),
+            data={"schemas": schemas, "matched": matched},
         )

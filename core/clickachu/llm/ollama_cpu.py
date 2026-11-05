@@ -8,6 +8,7 @@ import uuid
 import httpx
 
 from clickachu.api.protocol import Usage
+from clickachu.llm.local_actions import repetitive_reasoning
 from clickachu.llm.provider import Done, LLMError, ReasoningDelta, TextDelta, ToolCall
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ async def stream_cpu(
     if reasoning_effort != "auto":
         body["think"] = reasoning_effort != "off"
     started = time.monotonic()
+    structured_chars = 0
+    reasoning_tail = ""
     log.info(
         "local request model=%s prompt_chars=%d schema_chars=%d max_tokens=%d",
         model,
@@ -88,6 +91,13 @@ async def stream_cpu(
                     if chunk.get("error"):
                         raise LLMError("Ollama CPU inference failed: " + str(chunk["error"])[:300])
                     message = chunk.get("message", {})
+                    if response_schema is not None:
+                        structured_chars += len(message.get("thinking") or "")
+                        reasoning_tail = (reasoning_tail + (message.get("thinking") or ""))[-256:]
+                        if structured_chars > 2000 or repetitive_reasoning(reasoning_tail):
+                            raise LLMError(
+                                "Local structured generation drifted; no action was executed."
+                            )
                     if message.get("thinking"):
                         yield ReasoningDelta(message["thinking"])
                     if message.get("content"):

@@ -106,7 +106,7 @@ class OpenRouterProvider:
                 json_mode=json_mode,
                 response_schema=response_schema,
                 tools=tools,
-                reasoning_effort=self._reasoning_effort,
+                reasoning_effort="off" if response_schema is not None else self._reasoning_effort,
                 keep_alive=keep_alive,
                 temperature=temperature,
             ):
@@ -142,7 +142,9 @@ class OpenRouterProvider:
         if self._is_openrouter:
             # OpenRouter extension: include cost in the final usage chunk.
             kwargs["extra_body"] = {"usage": {"include": True}}
-        effort = self._reasoning_effort
+        effort = (
+            "off" if self._is_ollama and response_schema is not None else self._reasoning_effort
+        )
         if self._is_gemini:
             # Pro and newer Gemini families cannot disable reasoning. Do not send unsupported
             # "none" to them. Tiny router/dedup requests should not inherit a high budget.
@@ -265,10 +267,13 @@ class OpenRouterProvider:
             action_messages,
             action_schema,
             bind_runtime_arguments,
+            repetitive_reasoning,
         )
 
         parts = []
         usage = Done().usage
+        raw_size = 0
+        reasoning_tail = ""
         async for event in self.stream(
             model,
             action_messages(messages, tools, require_tool),
@@ -279,10 +284,20 @@ class OpenRouterProvider:
         ):
             if isinstance(event, TextDelta):
                 parts.append(event.text)
+                raw_size += len(event.text)
+                if raw_size > 8000:
+                    raise LLMError(
+                        "Local action output exceeded its limit; no action was executed."
+                    )
             elif isinstance(event, Done):
                 usage = event.usage
             elif isinstance(event, ReasoningDelta):
-                yield event
+                # JSON actions are machine output. A backend ignoring think=false must not
+                # stream an unbounded reasoning transcript into the activity log.
+                raw_size += len(event.text)
+                reasoning_tail = (reasoning_tail + event.text)[-256:]
+                if raw_size > 2000 or repetitive_reasoning(reasoning_tail):
+                    raise LLMError("Local action generation drifted; no action was executed.")
         try:
             decision = json.loads("".join(parts))
             name, arguments = decision["tool"], decision["arguments"]

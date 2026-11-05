@@ -54,7 +54,7 @@ import {
 } from './windows/quickbar'
 
 // A second instance couldn't register the hotkeys and would spawn a second sidecar.
-if (!app.requestSingleInstanceLock()) app.quit()
+if (!app.requestSingleInstanceLock()) app.exit(0)
 
 // On Windows, multiple transparent DirectComposition windows combined with WebGL shaders
 // can trigger GPU sandbox access violations (STATUS_ACCESS_VIOLATION / exit_code -1073741819).
@@ -283,7 +283,7 @@ void app.whenReady().then(() => {
   registerHotkeys(hotkeyActions)
 })
 
-app.on('second-instance', () => openQuickBar())
+app.on('second-instance', () => openQuickBar(null, undefined, false))
 
 // The orb is always there; the app lives until Quit (orb menu / tray).
 app.on('window-all-closed', () => {

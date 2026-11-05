@@ -68,7 +68,9 @@ def current_observation(run_id):
         for key, obs in _observations.items()
         if obs.run_id == run_id and time.monotonic() - obs.captured <= 300
     ]
-    return max(valid, key=lambda item: item[1].captured) if valid else None
+    # Windows' monotonic clock can give adjacent captures the same timestamp. The later
+    # insertion is the newest observation in that case, not the older window/control set.
+    return max(reversed(valid), key=lambda item: item[1].captured) if valid else None
 
 
 def observation_error(args, run_id):
@@ -285,6 +287,7 @@ def observe(
                 "enabled": row.enabled,
                 "context": row.context,
                 "bounds": row.bounds,
+                "value": row.value,
             }
             entries.append(entry)
             lines.append(

@@ -18,6 +18,7 @@ class NativeControl:
     frame: bool = False
     password: bool = False
     element: object = field(default=None, repr=False)
+    value: str = ""
 
 
 def _property(element, key, default=None):
@@ -70,11 +71,16 @@ def _capture(client, root, api, raw=False, limit=1800):
                         frame,
                         password,
                         element,
+                        " ".join(value.split())[:200]
+                        if isinstance(value, str) and not password
+                        else "",
                     )
                 )
         context = (
             name[:100]
-            if name and control_type in ("Group", "Pane", "Window", "ToolBar")
+            if name
+            and control_type
+            in ("Group", "Pane", "Window", "ToolBar", "DataItem", "ListItem", "TreeItem")
             else parent_name
         )
         children = element.GetCachedChildren()

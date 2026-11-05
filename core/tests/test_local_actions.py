@@ -265,3 +265,24 @@ async def test_invalid_or_premature_decisions_cannot_execute(reply):
                 require_tool=True,
             )
         ]
+
+
+async def test_adapter_does_not_publish_or_execute_repetitive_reasoning():
+    from clickachu.llm.provider import ReasoningDelta
+
+    provider = OpenRouterProvider.__new__(OpenRouterProvider)
+    provider._is_ollama = True
+
+    async def stream(*args, **kwargs):
+        yield ReasoningDelta("valid-looking action followed by repetitive junk " * 100)
+        yield TextDelta('{"tool":"open_app","arguments":{"name":"Notepad"}}')
+        yield Done()
+
+    provider.stream = stream
+    events = []
+    with pytest.raises(LLMError, match="drifted"):
+        async for event in provider.stream_agent(
+            "fixture", [], create_default_registry().schemas(names=["open_app"]), require_tool=True
+        ):
+            events.append(event)
+    assert events == []

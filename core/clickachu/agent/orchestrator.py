@@ -12,8 +12,17 @@ from typing import Any
 from pydantic import ValidationError
 
 from clickachu.agent.activity import activity_for
-from clickachu.agent.goals import confirmed_context, control_label, request_goal, resume_requested
+from clickachu.agent.goals import (
+    RequestGoal,
+    confirmed_context,
+    control_label,
+    request_goal,
+    requested_launch_target,
+    resume_requested,
+)
+from clickachu.agent.progress import ReadProgress
 from clickachu.agent.tasks import TaskStore, compact_messages
+from clickachu.agent.ui_steps import constrain_ui_step
 from clickachu.api.protocol import (
     AllowedRoot,
     ApprovalDecision,
@@ -79,6 +88,7 @@ from clickachu.tools.base import Tool, ToolContext, ToolResult, ToolWorkers
 from clickachu.tools.computer import (
     DesktopActionTool,
     action_scope,
+    current_observation,
     observation_error,
     observed_control_label,
 )
@@ -128,6 +138,7 @@ class _ActiveRun:
     conversation_id: str = ""
     started: float = field(default_factory=time.monotonic)
     window_grants: set[tuple[int, int]] = field(default_factory=set)
+    goal: RequestGoal | None = None
 
 
 class Orchestrator:
@@ -246,14 +257,16 @@ class Orchestrator:
             selected_action = re.fullmatch(
                 r"\s*(?:please\s+)?(summari[sz]e|explain|rewrite|translate)"
                 r"(?:\s+(?:this|it|the selection|selected text|this text))?\s*[.!]?\s*",
-                msg.text, re.I,
+                msg.text,
+                re.I,
             )
             if selected_action:
                 action = selected_action[1].lower().replace("summarize", "summarise")
                 msg = msg.model_copy(update={"action": action})
         needs_source = msg.action in ("summarise", "explain", "rewrite", "translate", "fix")
-        if ((needs_source and not msg.text.strip() and not (snapshot and snapshot.selection))
-                or (msg.context_id and snapshot is None and should_include_selection(msg))):
+        if (needs_source and not msg.text.strip() and not (snapshot and snapshot.selection)) or (
+            msg.context_id and snapshot is None and should_include_selection(msg)
+        ):
             await self._fail(
                 msg.run_id,
                 "The selected text is missing or expired. Select it again and press Alt+Q.",
@@ -263,9 +276,15 @@ class Orchestrator:
             # Only typed user text is observed, never captured/selected source material.
             for outcome in self._memory.observe_user_message(msg.text):
                 saved = outcome.memory
-                await self._emit(MemorySavedEvent(memory=MemoryRef(
-                    id=saved.id, content=saved.content, scope=scope_label(saved),
-                )))
+                await self._emit(
+                    MemorySavedEvent(
+                        memory=MemoryRef(
+                            id=saved.id,
+                            content=saved.content,
+                            scope=scope_label(saved),
+                        )
+                    )
+                )
         if (
             msg.action in (None, "ask", "do")
             and process_list_requested(msg.text)
@@ -276,7 +295,18 @@ class Orchestrator:
             )
             return
         initial_evidence = None
-        goal = request_goal(msg.text)
+        previous = TaskStore(self._db).get(msg.conversation_id or msg.run_id) or {}
+        goal = request_goal(msg.text, previous.get("context", {}))
+        active.goal = goal
+        if goal and goal.kind == "media_selection" and not goal.target:
+            try:
+                target = await resolve_media_target(
+                    "", previous.get("context", {}).get("media_app", "")
+                )
+            except (OSError, ValueError, RuntimeError, ImportError) as exc:
+                await self._fail(msg.run_id, str(exc))
+                return
+            goal = active.goal = replace(goal, target=target)
         if goal and goal.kind == "inspection" and self._registry.get("observe_desktop"):
             await self._run_direct_tool(
                 msg,
@@ -335,10 +365,12 @@ class Orchestrator:
 
         research = None
         selection_question = bool(
-            snapshot and snapshot.selection and should_include_selection(msg)
+            snapshot
+            and snapshot.selection
+            and should_include_selection(msg)
             and heuristic_mode(msg.text, mode=msg.mode, action=msg.action) != "agent"
         )
-        if initial_evidence:
+        if initial_evidence or (goal and goal.kind == "media_selection"):
             mode = "agent"
         elif selection_question:
             mode = "ask"
@@ -649,10 +681,59 @@ class Orchestrator:
                 agent=True,
                 is_ollama=is_ollama,
                 model_name=model,
-                history=history,
+                history=[]
+                if launch_target or (goal and goal.kind == "media_selection")
+                else history,
             )
             model_caps = capabilities(settings, model)
             tool_schemas = self._registry.hybrid_schemas(msg.text)
+            selection_workflow = bool(goal and goal.kind == "media_selection")
+            bootstrap = None
+            if selection_workflow:
+                # Selecting content requires app search, not transport controls. This is the
+                # same generic desktop workflow for every media app, with no song allowlist.
+                tool_schemas = self._registry.schemas(
+                    names=[
+                        "open_app",
+                        "observe_desktop",
+                        "desktop_action",
+                        "wait_for_ui",
+                        "list_windows",
+                    ]
+                )
+                first_tool = "open_app" if self._registry.get("open_app") else "observe_desktop"
+                if not self._registry.get(first_tool):
+                    raise LLMError(
+                        "App navigation is unavailable; the requested content was not played."
+                    )
+                bootstrap = ToolCall(
+                    "media_ui_start",
+                    first_tool,
+                    json.dumps({"name" if first_tool == "open_app" else "title": goal.target}),
+                )
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Requested media: title={goal.content!r}, artist={goal.artist!r}, "
+                            f"app={goal.target!r}. Use the observed search field to find it, "
+                            "then select the matching result. Use fresh refs, fill the query "
+                            "with submit=true and wait for results. Do not resume the old queue "
+                            "or claim the title was not found without inspecting search results. "
+                            "Completion requires matching playing metadata."
+                        ),
+                    }
+                )
+            elif (
+                launch_target
+                and self._registry.get("open_app")
+                and not notepad_write_requested(msg.text)
+            ):
+                # A literal app target needs no model inference. Old tool-output history must
+                # not substitute a different application for this fresh request.
+                bootstrap = ToolCall(
+                    "app_ui_start", "open_app", json.dumps({"name": launch_target})
+                )
             if not settings.code_execution_enabled:
                 tool_schemas = [s for s in tool_schemas if s["function"]["name"] != "execute_code"]
             task_store = TaskStore(self._db)
@@ -717,6 +798,16 @@ class Orchestrator:
                 )
             run_started = active.started if initial_evidence else time.monotonic()
             consecutive_failures = 0
+            read_progress = ReadProgress()
+            controller_notes = []
+            latest_ui = None
+            search_submitted = False
+            automatic_inputs = set()
+            activated_refs = set()
+            opened_apps = set()
+            duplicate_launches = {}
+            requested_pids = set()
+            requested_windows = set()
             stop_reason = "step limit"
             messages.append(
                 {
@@ -815,6 +906,8 @@ class Orchestrator:
             await self._emit(RunDetailEvent(run_id=msg.run_id, kind="plan", delta=plan))
 
             for _step_num in range(1, settings.agent_max_steps + 1):
+                messages.extend(controller_notes)
+                controller_notes.clear()
                 elapsed = time.monotonic() - run_started
                 if elapsed >= settings.agent_max_seconds:
                     stop_reason = "time budget"
@@ -838,7 +931,9 @@ class Orchestrator:
                             ),
                         }
                     )
-                if not research_workflow:
+                automatic = bootstrap
+                bootstrap = None
+                if not research_workflow and automatic is None:
                     active.checkpoint["model_calls"] += 1
                 await set_orb("thinking")
                 if settings.debug_log_prompts:
@@ -907,6 +1002,44 @@ class Orchestrator:
                             " Your previous response contained assistant meta-text. "
                             "Return only the requested prose, with no I-cannot or copy/paste text."
                         )
+                bound_tools = self._registry.bind_ui_state(tool_schemas, msg.run_id)
+                ui_step = (
+                    constrain_ui_step(
+                        bound_tools,
+                        latest_ui,
+                        goal=goal,
+                        request=msg.text,
+                        search_submitted=search_submitted,
+                        used_refs=activated_refs,
+                    )
+                    if not notepad_workflow and not research_workflow
+                    else None
+                )
+                if ui_step:
+                    generation_messages = [
+                        *generation_messages,
+                        {
+                            "role": "system",
+                            "content": ui_step.instruction,
+                        },
+                    ]
+                    if automatic is None and ui_step.automatic_arguments:
+                        arguments = ui_step.automatic_arguments
+                        signature = json.dumps(
+                            {
+                                "hwnd": latest_ui.get("hwnd"),
+                                **{k: v for k, v in arguments.items() if k != "observation_id"},
+                            },
+                            sort_keys=True,
+                        )
+                        if signature not in automatic_inputs:
+                            automatic_inputs.add(signature)
+                            automatic = ToolCall(
+                                f"observed_step_{_step_num}",
+                                "desktop_action",
+                                json.dumps(arguments),
+                            )
+                            active.checkpoint["model_calls"] -= 1
                 model_events = (
                     research_state.events(
                         provider,
@@ -925,10 +1058,12 @@ class Orchestrator:
                         generation_messages,
                         tools=None
                         if notepad_workflow
-                        else self._registry.bind_ui_state(tool_schemas, msg.run_id),
+                        else ui_step.schemas
+                        if ui_step
+                        else bound_tools,
                         require_tool=not notepad_workflow
                         and not research_workflow
-                        and (step_seq == 0 or nudges > 0),
+                        and (step_seq == 0 or nudges > 0 or ui_step is not None),
                         max_tokens=(
                             768
                             if notepad_workflow and is_ollama
@@ -945,6 +1080,13 @@ class Orchestrator:
                         ),
                     )
                 )
+                if automatic is not None:
+
+                    async def automatic_events(decision=automatic):
+                        yield decision
+                        yield Done()
+
+                    model_events = automatic_events()
                 model_started = time.monotonic()
                 async for event in model_events:
                     if isinstance(event, TextDelta):
@@ -1027,6 +1169,7 @@ class Orchestrator:
                     )
                     if (
                         missing_execution
+                        or goal is not None
                         or action_intent
                         or command_instead_of_action
                         or needs_lookup
@@ -1044,8 +1187,8 @@ class Orchestrator:
                                     "Use browser_search now for the topic in this conversation. "
                                     "Return a tool call; do not suggest a manual search."
                                     if needs_lookup
-                                    else "Please proceed now and execute the required tool call "
-                                    "using the function calling format."
+                                    else f"The request is incomplete: {msg.text}. "
+                                    "Use the current UI/evidence and execute the remaining action."
                                 ),
                             }
                         )
@@ -1167,7 +1310,8 @@ class Orchestrator:
                                 "tool_call_id": tc.id,
                                 "content": wrap_untrusted(
                                     f"tool:{tool.name}",
-                                    "Action was not executed: it contradicts the requested goal. "
+                                    "Action was not executed: target not requested or it "
+                                    "contradicts the requested goal. "
                                     f"The goal is {goal.operation} in {goal.target}. "
                                     "Inspect state or finish it.",
                                 ),
@@ -1175,8 +1319,90 @@ class Orchestrator:
                         )
                         consecutive_failures += 1
                         continue
+                    if (
+                        launch_target
+                        and tool.name == "open_app"
+                        and parsed_args.name.casefold() != launch_target.casefold()
+                        and not re.search(
+                            r"(?<!\w)" + re.escape(parsed_args.name) + r"(?!\w)", msg.text, re.I
+                        )
+                    ):
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": wrap_untrusted(
+                                    f"tool:{tool.name}",
+                                    f"Not executed: the user requested {launch_target!r}; "
+                                    f"{parsed_args.name!r} was not requested. "
+                                    "Continue in the requested app.",
+                                ),
+                            }
+                        )
+                        consecutive_failures += 1
+                        continue
+                    if (
+                        tool.name == "open_app"
+                        and parsed_args.name.casefold() in opened_apps
+                        and not re.search(
+                            r"\b(?:another|second|two|twice|new window)\b",
+                            msg.text,
+                            re.I,
+                        )
+                    ):
+                        app_key = parsed_args.name.casefold()
+                        duplicate_launches[app_key] = duplicate_launches.get(app_key, 0) + 1
+                        if duplicate_launches[app_key] >= 2:
+                            raise LLMError(
+                                "Stopped a repeated action loop. This app is already open; "
+                                "the task is incomplete and no duplicate launch was executed."
+                            )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": wrap_untrusted(
+                                    f"tool:{tool.name}",
+                                    "Duplicate action was not executed: this app is already open. "
+                                    "Use its controls, or inspect the changed window.",
+                                ),
+                            }
+                        )
+                        consecutive_failures += 1
+                        continue
+                    if ui_step and tool.name == "desktop_action":
+                        allowed = ui_step.schemas[0]["function"]["parameters"]["properties"]
+                        if (
+                            parsed_args.action not in allowed["action"]["enum"]
+                            or parsed_args.ref not in allowed["ref"]["enum"]
+                            or (parsed_args.action == "fill" and not parsed_args.submit)
+                        ):
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": wrap_untrusted(
+                                        f"tool:{tool.name}",
+                                        "Not executed: use the observed control for this step. "
+                                        + ui_step.instruction,
+                                    ),
+                                }
+                            )
+                            consecutive_failures += 1
+                            continue
                     if isinstance(tool, DesktopActionTool):
                         invalid = observation_error(parsed_args, msg.run_id)
+                        scope = action_scope(parsed_args, msg.run_id)
+                        if (
+                            not invalid
+                            and requested_pids
+                            and scope
+                            and scope[1] not in requested_pids
+                        ):
+                            invalid = (
+                                "This control belongs to a different application. "
+                                "Observe the requested app again; no input was sent."
+                            )
                         if (
                             not invalid
                             and goal
@@ -1471,6 +1697,18 @@ class Orchestrator:
                     consecutive_failures = (
                         0 if result.ok and verified is not False else consecutive_failures + 1
                     )
+                    unchanged_reads = read_progress.observe(tool, parsed_args, result)
+                    if unchanged_reads == 2:
+                        controller_notes.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "The same read returned unchanged evidence twice. "
+                                    "Do not repeat it. Use the current tools/UI to progress, "
+                                    "change methods, or accurately report the blocker."
+                                ),
+                            }
+                        )
                     if result.ok and verified is not False:
                         repeated_action_count = (
                             repeated_action_count + 1 if signature == last_action_signature else 1
@@ -1484,6 +1722,35 @@ class Orchestrator:
                         # A successful state change is new evidence; earlier failures may now work.
                         failed_signatures.clear()
                     active.checkpoint["pending_action"] = None
+                    if result.ok and tool.name == "open_app":
+                        opened_apps.add(parsed_args.name.casefold())
+                        if (
+                            (launch_target or selection_workflow)
+                            and isinstance(result.data, dict)
+                            and result.data.get("hwnd")
+                        ):
+                            requested_windows.add(result.data["hwnd"])
+                    elif not result.ok and tool.name == "observe_desktop":
+                        opened_apps.clear()
+                        duplicate_launches.clear()
+                    if result.ok and isinstance(result.data, dict) and result.data.get("entries"):
+                        latest_ui = result.data
+                        observed = current_observation(msg.run_id)
+                        if observed and observed[1].hwnd in requested_windows:
+                            requested_pids.add(observed[1].pid)
+                    if (
+                        result.ok
+                        and tool.name == "desktop_action"
+                        and parsed_args.action == "fill"
+                        and parsed_args.submit
+                    ):
+                        search_submitted = True
+                    if (
+                        result.ok
+                        and tool.name == "desktop_action"
+                        and parsed_args.action in ("click", "double_click")
+                    ):
+                        activated_refs.add(parsed_args.ref)
                     active.checkpoint["context"] = confirmed_context(
                         active.checkpoint["context"], tool.name, parsed_args, result, verified
                     )
@@ -1506,6 +1773,9 @@ class Orchestrator:
                         loaded = {schema["function"]["name"]: schema for schema in tool_schemas}
                         for schema in result.data.get("schemas", []):
                             if (
+                                not selection_workflow
+                                or schema["function"]["name"] != "control_media"
+                            ) and (
                                 schema["function"]["name"] != "execute_code"
                                 or settings.code_execution_enabled
                             ):
@@ -1559,13 +1829,19 @@ class Orchestrator:
                             verified=verified,
                         )
                     )
+                    if unchanged_reads >= 3:
+                        raise LLMError(
+                            "Stopped repeated reads with no new information. "
+                            "The task is incomplete; no further action was taken."
+                        )
                     completed_summaries.append(f"{tool.name}: {result.summary}")
                     completion = (tool.name, parsed_args, result, verified)
                     if (
                         goal
-                        and goal.kind == "media"
+                        and goal.kind in ("media", "media_selection")
                         and result.ok
-                        and tool.name in ("desktop_action", "observe_desktop", "wait_for_ui")
+                        and tool.name
+                        in ("open_app", "desktop_action", "observe_desktop", "wait_for_ui")
                         and self._registry.get("control_media")
                     ):
                         checker = self._registry.get("control_media")
@@ -1587,6 +1863,27 @@ class Orchestrator:
                         checked, check_verified = await self._execute_and_verify(
                             checker, check_args, replace(ctx, step_id=check_id)
                         )
+                        if (
+                            selection_workflow
+                            and tool.name == "desktop_action"
+                            and parsed_args.action in ("click", "double_click")
+                        ):
+                            deadline = min(
+                                time.monotonic() + 1.5, run_started + settings.agent_max_seconds
+                            )
+                            while (
+                                checked.ok
+                                and not goal.completed(
+                                    checker.name, check_args, checked, check_verified
+                                )
+                                and time.monotonic() < deadline
+                            ):
+                                await asyncio.sleep(0.2)
+                                checked, check_verified = await self._execute_and_verify(
+                                    checker,
+                                    check_args,
+                                    replace(ctx, step_id=check_id),
+                                )
                         active.checkpoint["context"] = confirmed_context(
                             active.checkpoint["context"],
                             checker.name,
@@ -1632,11 +1929,23 @@ class Orchestrator:
                             )
                         )
                         completion = (checker.name, check_args, checked, check_verified)
+                        if selection_workflow and not goal.completed(*completion):
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": wrap_untrusted(
+                                        "current_playback",
+                                        checked.summary,
+                                    ),
+                                }
+                            )
                     if goal and goal.completed(*completion):
                         final_text = redact(completion[2].summary)
                         if goal.kind == "ui_click":
                             target = completion[2].data["performed_action"]["target"]
                             final_text = f"Clicked {target!r} in {goal.target}."
+                        elif goal.kind == "app_destination":
+                            final_text = f"Opened {goal.content} after opening {goal.target}."
                         self._record_message(conversation_id, "assistant", final_text)
                         await self._emit(TokenEvent(run_id=msg.run_id, delta=final_text))
                         await self._emit(

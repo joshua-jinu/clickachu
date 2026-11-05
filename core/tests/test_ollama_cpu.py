@@ -76,6 +76,44 @@ async def test_cpu_actions_use_same_validation_and_schema(transport):
     assert "anyOf" in json.loads(calls[0].content)["format"]
 
 
+async def test_structured_actions_disable_reasoning_even_when_chat_reasoning_is_enabled(transport):
+    install, calls = transport
+    install(
+        [
+            {"message": {"content": '{"tool":"open_app","arguments":{"name":"Example"}}'}},
+            {"done": True},
+        ]
+    )
+    provider = OpenRouterProvider(
+        base_url="http://localhost:11434/v1",
+        api_key="",
+        ollama_cpu_only=True,
+        reasoning_effort="high",
+    )
+    _ = [
+        e
+        async for e in provider.stream_agent(
+            "fixture", [], create_default_registry().schemas(names=["open_app"]), require_tool=True
+        )
+    ]
+    assert json.loads(calls[0].content)["think"] is False
+
+
+async def test_runaway_structured_thinking_is_aborted_without_action(transport):
+    install, _ = transport
+    install([{"message": {"thinking": "普京" * 40}}, {"done": True}])
+    provider = OpenRouterProvider(
+        base_url="http://localhost:11434/v1", api_key="", ollama_cpu_only=True
+    )
+    events = []
+    with pytest.raises(LLMError, match="drifted"):
+        async for event in provider.stream_agent(
+            "fixture", [], create_default_registry().schemas(names=["open_app"]), require_tool=True
+        ):
+            events.append(event)
+    assert events == []
+
+
 async def test_optional_local_summary_model_does_not_replace_desktop_model(transport):
     install, calls = transport
     install([{"message": {"content": '{"answer":"Evidence.","source_ids":[1]}'}}, {"done": True}])

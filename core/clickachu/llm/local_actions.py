@@ -9,6 +9,14 @@ FINISH = "__finish__"
 MAX_PROMPT_CHARS = 9000  # Conservative text budget; exact token counts vary by model.
 
 
+def repetitive_reasoning(text):
+    """Bounded check for a decoder cycling over the same short token sequence."""
+    if len(text) < 64:
+        return False
+    tail = text[-256:]
+    return any(tail[-size:].strip() and tail.endswith(tail[-size:] * 8) for size in range(1, 33))
+
+
 def compact_schema(value):
     if isinstance(value, dict):
         return {
@@ -49,6 +57,8 @@ def decision_variants(function):
         ("keys", ["keys"], ["ref", *waits]),
         ("scroll", ["wheel"], waits),
     ):
+        if action not in props.get("action", {}).get("enum", [action]):
+            continue
         fields = {name: deepcopy(props[name]) for name in required + optional if name in props}
         fields["action"] = {"const": action}
         if "ref" in required:
@@ -65,7 +75,15 @@ def decision_variants(function):
                 {
                     "type": "object",
                     "properties": fields,
-                    "required": ["action", *required],
+                    "required": list(
+                        dict.fromkeys(
+                            [
+                                "action",
+                                *required,
+                                *(name for name in optional if name in schema.get("required", [])),
+                            ]
+                        )
+                    ),
                     "additionalProperties": False,
                 }
             )
