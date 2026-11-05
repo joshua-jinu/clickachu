@@ -315,8 +315,20 @@ def test_window_resolution_accepts_unique_process_despite_changing_title(monkeyp
             (53, "Track two", "ExamplePlayer.exe"),
         ],
     )
+    # Two windows of the same app: use the topmost one instead of failing the task.
+    assert computer.target_window("ExamplePlayer") == 51
+    monkeypatch.setattr(
+        desktop,
+        "_enumerate_windows",
+        lambda *args: [
+            (61, "Report - Editor", "Editor.exe"),
+            (62, "Report - Viewer", "Viewer.exe"),
+        ],
+    )
+    # A vague title shared by different apps remains ambiguous.
     with pytest.raises(ValueError, match="exactly one"):
-        computer.target_window("ExamplePlayer")
+        computer.target_window("Report")
+    assert computer.target_window("Report", hwnd=62) == 62
 
 
 @pytest.mark.parametrize(
