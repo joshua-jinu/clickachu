@@ -108,31 +108,48 @@ def is_elevated(pid: int) -> bool:
         process.Close()
 
 
-def target_window(title: str):
+def target_window(title: str, hwnd: int | None = None):
     from pywinauto import Desktop
 
     from clickachu.automation.winapi import RealWin32
     from clickachu.tools.desktop import _enumerate_windows
 
     # Media players and document editors often put only the current track/document in the
-    # title. Resolve a unique process name as well; never pick the foreground app arbitrarily.
-    visible = _enumerate_windows(RealWin32())
+    # title. Resolve a unique process name as well; never pick an unrelated app arbitrarily.
+    win32 = RealWin32()
+    visible = _enumerate_windows(win32)
+    if hwnd is not None:
+        chosen = [w for w in visible if w[0] == hwnd]
+        if not chosen:
+            raise ValueError(f"No visible window has hwnd={hwnd}; list windows again.")
+        return Desktop(backend="uia").window(handle=hwnd).wrapper_object()
     query = title.strip().casefold()
     exact = [w for w in visible if w[1].casefold() == query]
     process = [w for w in visible if w[2].casefold().removesuffix(".exe") == query]
     partial = [w for w in visible if query in w[1].casefold()]
     windows = exact or process or partial
-    if len(windows) != 1:
-        raise ValueError(
-            "Window title must identify exactly one visible window; list windows again."
-        )
+    if not windows:
+        raise ValueError(f"No visible window matches {title!r}; list windows again.")
+    if len(windows) > 1:
+        # Several windows of the SAME app (e.g. two Notepad documents) are a normal state, not
+        # an error. Prefer the one the user is looking at, then the topmost in Z-order
+        # (EnumWindows order). Different apps matching a vague title stay ambiguous.
+        apps = {w[2].casefold() for w in windows}
+        if len(apps) > 1 and not exact:
+            raise ValueError(
+                "Window title must identify exactly one visible window; list windows again."
+            )
+        foreground = getattr(win32, "foreground_window", lambda: None)() if win32 else None
+        windows = [w for w in windows if w[0] == foreground] or windows[:1]
     return Desktop(backend="uia").window(handle=windows[0][0]).wrapper_object()
 
 
-def context_window(title, ctx):
+def context_window(title, ctx, hwnd=None):
     """Use this task's identified window when another app window has the same title."""
     from pywinauto import Desktop
 
+    if hwnd is not None:
+        return target_window(title, hwnd)
     scopes = sorted(
         [
             (key, state)
@@ -389,7 +406,12 @@ def observe(
 
 
 class ObserveDesktopArgs(BaseModel):
-    title: str = Field(min_length=1, description="Unique window title from list_windows/open_app")
+    title: str = Field(
+        min_length=1, description="Window title or app name from list_windows/open_app"
+    )
+    hwnd: int | None = Field(
+        default=None, description="Exact window handle from list_windows/open_app, if known"
+    )
     include_image: bool = Field(
         default=False, description="Only needed for visual/coordinate actions"
     )
@@ -411,7 +433,7 @@ class ObserveDesktopTool(Tool[ObserveDesktopArgs]):
 
     def run(self, args, ctx):
         return observe(
-            context_window(args.title, ctx),
+            context_window(args.title, ctx, args.hwnd),
             ctx,
             args.include_image,
             args.query,

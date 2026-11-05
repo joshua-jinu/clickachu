@@ -28,6 +28,14 @@ def passages(text, question, limit=1000):
     return "\n".join(p for _, p in sorted(chosen)) or text[:limit]
 
 
+def _numbers(text):
+    """Numbers in a comparable form: "1,000" and "1000" match; ordinals keep their digits."""
+    return {
+        value.replace(",", "")
+        for value in re.findall(r"(?<![\w.])\d+(?:[.,]\d+)*(?=st|nd|rd|th|\b)", text)
+    }
+
+
 async def synthesize(provider, model, objective, sources, timeout_seconds=90, document=False):
     prompt = [
         {
@@ -109,11 +117,14 @@ async def synthesize(provider, model, objective, sources, timeout_seconds=90, do
     cited_urls = set(re.findall(r"https?://[^\s<>\]\)\"']+", answer))
     if not cited_urls <= observed_urls:
         raise LLMError("The model included a link outside the retrieved sources.")
-    numbers = set(re.findall(r"\b\d+(?:[.,]\d+)*\b", answer))
-    supported = set(
-        re.findall(r"\b\d+(?:[.,]\d+)*\b", " ".join(sources[i - 1]["text"] for i in ids))
-    )
-    if not numbers <= supported:
+    # Every date/number must appear in the read evidence. A model often adds one derived
+    # figure (an age, a reformatted date); drop just those sentences instead of discarding an
+    # otherwise grounded answer. Only if nothing grounded remains is the answer rejected.
+    supported = _numbers(" ".join(source["text"] for source in sources))
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z\[])", answer)
+    grounded = [sentence for sentence in sentences if _numbers(sentence) <= supported]
+    if not grounded or not any(re.search(r"[A-Za-z]{3}", sentence) for sentence in grounded):
         raise LLMError("The answer included a date or number absent from its source evidence.")
+    answer = " ".join(grounded)
     links = " ".join(f"[Source {i}]({sources[i - 1]['url']})" for i in dict.fromkeys(ids))
     yield TextDelta(answer + ("\n\n" + links if not document else ""))

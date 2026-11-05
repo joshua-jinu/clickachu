@@ -5,14 +5,15 @@ import re
 
 def writing_brief(request: str) -> str:
     match = re.search(
-        r"\b(?:write|type|draft|compose|insert|put)\b\s*(.*)",
+        r"\b(?:write|type|draft|compose|insert|put|add|paste|enter|jot(?:\s+down)?)\b\s*(.*)",
         request,
         flags=re.IGNORECASE | re.DOTALL,
     )
     brief = match.group(1) if match else request
     brief = re.sub(r"^\s*(?:me|us)\s+", "", brief, flags=re.IGNORECASE)
     brief = re.sub(
-        r"\b(?:in|into|using|on)\s+(?:an?\s+)?(?:empty\s+)?(?:notepad|nodepad|note\s+pad)\b",
+        r"\b(?:in|into|using|on|to)\s+(?:an?\s+|the\s+)?(?:empty\s+|open\s+)?"
+        r"(?:notepad|nodepad|note\s+pad)(?:\s+(?:window|app|document|tab))?\b",
         "",
         brief,
         flags=re.IGNORECASE,
