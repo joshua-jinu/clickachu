@@ -24,7 +24,7 @@ export type LLMProviderType = 'gemini' | 'ollama'
 export const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 export const DEFAULT_ROUTER_MODEL = 'gemini-2.5-flash-lite'
 export const DEFAULT_ASK_MODEL = 'gemini-2.5-flash'
-export const DEFAULT_AGENT_MODEL = 'gemini-2.5-flash'
+export const DEFAULT_AGENT_MODEL = 'gemini-2.5-pro'
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1'
 export const DEFAULT_OLLAMA_MODEL = 'llama3.2:3b'
@@ -436,6 +436,12 @@ export interface VoiceLevelEvent {
   rms: number
 }
 
+/** Interim transcript of the audio so far, sent repeatedly while recording (live captions). */
+export interface VoicePartialEvent {
+  type: 'voice.partial'
+  text: string
+}
+
 export interface VoiceDoneEvent {
   type: 'voice.done'
   text: string
@@ -455,6 +461,7 @@ export type ServerMessage =
   | MemorySavedEvent
   | SuggestionEvent
   | VoiceLevelEvent
+  | VoicePartialEvent
   | VoiceDoneEvent
 
 export type ServerMessageType = ServerMessage['type']

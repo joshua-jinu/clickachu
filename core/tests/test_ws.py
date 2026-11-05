@@ -83,7 +83,8 @@ def test_ask_event_sequence(make_app: AppFactory) -> None:
         {"type": "orb.state", "state": "idle"},
     ]
     call = app.state.fake_provider.calls[0]
-    assert call["model"] == "test/ask-model"
+    # Open questions run on the thinking tier.
+    assert call["model"] == "test/agent-model"
     assert call["tools"] is None
     assert call["messages"][0]["role"] == "system"
     assert "untrusted_data" in call["messages"][0]["content"]
@@ -98,6 +99,8 @@ def test_action_adds_chip_instruction(make_app: AppFactory) -> None:
             ws.send_json({"type": "run", "run_id": "r1", "text": "text", "action": "summarise"})
             receive_until(ws, "run.finished")
     assert "TL;DR" in app.state.fake_provider.calls[0]["messages"][0]["content"]
+    # Summaries are an easy job: they run on the fast tier.
+    assert app.state.fake_provider.calls[0]["model"] == "test/fast-model"
 
 
 def test_cancel_stops_run_quickly(make_app: AppFactory) -> None:

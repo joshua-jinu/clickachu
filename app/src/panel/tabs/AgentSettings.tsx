@@ -18,16 +18,6 @@ export function AgentSettings({ form, onChange }: {
           Avoids GPU inference when the local runner crashes. Generation may be slower.
           Simple process and playback commands run directly without the model.
         </p>
-        <label className="block text-xs text-ck-muted">
-          Local model for short sourced summaries (optional)
-          <input className={inputClass} value={form.ollama_summary_model}
-            onChange={(e) => onChange({ ...form, ollama_summary_model: e.target.value })}
-            placeholder="Use the main local model" />
-        </label>
-        <p className="text-[11px] text-ck-muted">
-          Use an already downloaded model. This changes source-based summaries and factual drafts;
-          desktop decisions keep using the main model. No extra routing model call is added.
-        </p>
       </>}
       <label className="flex items-center gap-2 text-xs text-ck-muted">
         <input type="checkbox" checked={form.code_execution_enabled}

@@ -128,3 +128,99 @@ async def test_voice_api_routes(tmp_path: Any) -> None:
         assert r_stop.status_code == 200
         assert r_stop.json() == {"text": "find my resume"}
         assert service.stop_recording.called
+
+
+class RecordingWhisperModel(MockWhisperModel):
+    def __init__(self, transcript: str) -> None:
+        super().__init__(transcript)
+        self.beam_sizes: list[int] = []
+
+    def transcribe(self, audio: np.ndarray, **kwargs: Any) -> tuple[list[Any], Any]:
+        self.beam_sizes.append(kwargs.get("beam_size", 0))
+        return super().transcribe(audio, **kwargs)
+
+
+def _recording_service(tmp_path: Any, model: Any) -> tuple[VoiceService, list[dict[str, Any]]]:
+    events: list[dict[str, Any]] = []
+    service = VoiceService(models_dir=tmp_path, emit=events.append)
+    service._model = model
+    service._model_status = "ready"
+    service._recording = True
+    service._session = 1
+    return service, events
+
+
+def test_partial_tick_emits_live_transcript(tmp_path: Any) -> None:
+    model = RecordingWhisperModel("open my")
+    service, events = _recording_service(tmp_path, model)
+    service._speech_detected = True
+    service._audio_chunks = [np.full(1024, 0.1, dtype=np.float32) for _ in range(10)]
+
+    seen = service._partial_tick(1, 0)
+
+    assert seen == 10
+    assert {"type": "voice.partial", "text": "open my"} in events
+    assert model.beam_sizes == [1]  # fast greedy pass for partials
+
+
+def test_partial_tick_skips_without_new_audio_or_speech(tmp_path: Any) -> None:
+    model = RecordingWhisperModel("hello")
+    service, events = _recording_service(tmp_path, model)
+    service._audio_chunks = [np.full(1024, 0.1, dtype=np.float32) for _ in range(10)]
+
+    # No speech detected yet: nothing transcribed.
+    assert service._partial_tick(1, 0) == 0
+    service._speech_detected = True
+    # Already consumed every chunk: nothing transcribed.
+    assert service._partial_tick(1, 10) == 10
+    assert model.beam_sizes == []
+    assert not [e for e in events if e["type"] == "voice.partial"]
+
+
+def test_partial_tick_stops_when_session_ends(tmp_path: Any) -> None:
+    service, events = _recording_service(tmp_path, RecordingWhisperModel("hello"))
+    service._speech_detected = True
+    service._audio_chunks = [np.full(1024, 0.1, dtype=np.float32) for _ in range(10)]
+
+    assert service._partial_tick(2, 0) is None  # stale session
+    service._recording = False
+    assert service._partial_tick(1, 0) is None
+    assert not [e for e in events if e["type"] == "voice.partial"]
+
+
+def test_final_transcription_uses_wide_beam(tmp_path: Any) -> None:
+    model = RecordingWhisperModel("final words")
+    service, _events = _recording_service(tmp_path, model)
+    service._audio_chunks = [np.full(1024, 0.1, dtype=np.float32)]
+
+    assert service.stop_recording() == "final words"
+    assert model.beam_sizes == [5]
+
+
+@pytest.mark.asyncio
+async def test_hub_emit_broadcasts_from_threads() -> None:
+    import asyncio
+    import threading
+
+    from clickachu.api.ws import Hub
+
+    hub = Hub(token=None)
+    sent: list[Any] = []
+
+    async def fake_broadcast(message: Any) -> None:
+        sent.append(message)
+
+    hub.broadcast = fake_broadcast  # type: ignore[method-assign]
+    hub.bind_loop(asyncio.get_running_loop())
+
+    worker = threading.Thread(target=hub.emit, args=({"type": "voice.partial", "text": "hi"},))
+    worker.start()
+    worker.join()
+    hub.emit({"type": "voice.level", "rms": 0.5})  # from the loop thread itself
+    hub.emit({"type": "not.a.real.event"})  # invalid: dropped
+    for _ in range(20):
+        if len(sent) >= 2:
+            break
+        await asyncio.sleep(0.01)
+
+    assert sorted(m.type for m in sent) == ["voice.level", "voice.partial"]

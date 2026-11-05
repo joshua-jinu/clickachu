@@ -4,7 +4,7 @@
  * Click → toggle assistant workspace, drag > 4 px → move (main snaps on release), right-click → context menu.
  * Shows status badge and hover bubble for suggestions (Investigate / Dismiss / Later).
  */
-import { type MutableRefObject, type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@shared/api'
 import type { SuggestionEvent } from '@shared/protocol'
 import { useStore } from '@shared/store'
@@ -34,13 +34,7 @@ interface Press {
   dragging: boolean
 }
 
-export function Orb({
-  onActivate,
-  isEnabled = true,
-  expanded = false,
-  listening = false,
-  sceneHandleRef,
-}: { onActivate?: () => void; isEnabled?: boolean; expanded?: boolean; listening?: boolean; sceneHandleRef?: MutableRefObject<OrbScene | null> }) {
+export function Orb({ isEnabled = true }: { isEnabled?: boolean }) {
   const orbState = useStore((s) => s.orbState)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<OrbScene | null>(null)
@@ -59,15 +53,11 @@ export function Orb({
   const [bubbleVisible, setBubbleVisible] = useState(false)
 
   const hidden = orbState === 'hidden'
-  const renderSize = expanded ? 130 : SIZE
-  const renderRadius = expanded ? 54 : RADIUS
-  const hitRadius = expanded ? 70 : HIT_RADIUS
+  const renderSize = SIZE
+  const renderRadius = RADIUS
+  const hitRadius = HIT_RADIUS
   const visual: OrbVisualState =
-    orbState === 'hidden' || (orbState === 'error' && errorFaded)
-      ? 'idle'
-      : listening
-        ? 'listening'
-        : orbState
+    orbState === 'hidden' || (orbState === 'error' && errorFaded) ? 'idle' : orbState
   const active = hovered || dragging || visual !== 'idle' || Boolean(suggestion)
 
   const visualRef = useRef(visual)
@@ -80,7 +70,6 @@ export function Orb({
     const scene = new OrbScene(canvas, renderSize, renderRadius)
     sceneRef.current = scene
     let activeScene = scene
-    if (sceneHandleRef) sceneHandleRef.current = scene
     scene.start()
 
     const handleContextLost = (e: Event) => {
@@ -91,7 +80,6 @@ export function Orb({
       const newScene = new OrbScene(canvas, renderSize, renderRadius)
       activeScene = newScene
       sceneRef.current = newScene
-      if (sceneHandleRef) sceneHandleRef.current = newScene
       newScene.setState(visualRef.current)
       newScene.setHovered(hoveredRef.current)
       newScene.start()
@@ -104,10 +92,9 @@ export function Orb({
       canvas.removeEventListener('webglcontextlost', handleContextLost)
       canvas.removeEventListener('webglcontextrestored', handleContextRestored)
       activeScene.dispose()
-      if (sceneHandleRef?.current === activeScene) sceneHandleRef.current = null
       sceneRef.current = null
     }
-  }, [renderSize, renderRadius, sceneHandleRef])
+  }, [renderSize, renderRadius])
 
   useEffect(() => {
     visualRef.current = visual
@@ -239,9 +226,9 @@ export function Orb({
     setSuggestion(null)
     setBubbleVisible(false)
     window.clickachu.setOrbExpanded(false)
-    if (onActivate) onActivate()
-    else window.clickachu.openQuickBar(null, undefined, true)
-  }, [onActivate])
+    // Same QuickBar as Alt+Q, opened beside the orb with the mic on.
+    window.clickachu.openQuickBar(null, undefined, true, 'orb')
+  }, [])
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 || !isOverOrb(e.clientX, e.clientY)) return
@@ -375,9 +362,7 @@ export function Orb({
   return (
     <div
       ref={containerRef}
-      className={expanded
-        ? `ck-orb-expanded-visual relative flex h-full w-[194px] shrink-0 select-none items-center justify-center ${listening ? 'is-listening' : ''}`
-        : 'relative flex h-full w-full select-none items-center justify-end'}
+      className="relative flex h-full w-full select-none items-center justify-end"
       onClick={handleClick}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -426,7 +411,7 @@ export function Orb({
       )}
 
       {/* Orb container */}
-      <div ref={orbBoxRef} className={expanded ? 'ck-orb-grown relative h-[160px] w-[160px] shrink-0' : 'relative h-[120px] w-[120px] shrink-0'}>
+      <div ref={orbBoxRef} className="relative h-[120px] w-[120px] shrink-0">
         {!hidden && (
           <div
             className="
