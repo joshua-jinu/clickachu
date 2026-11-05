@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 RunAction = Literal["summarise", "explain", "translate", "rewrite", "fix", "ask", "do"]
 RunMode = Literal["ask", "agent"]
-ApprovalDecision = Literal["approve", "always", "deny"]
+ApprovalDecision = Literal["approve", "always", "task", "deny"]
 SuggestionDecision = Literal["accept", "dismiss", "later"]
 Tier = Literal["read", "low", "confirm", "blocked"]
 OrbStateName = Literal["idle", "listening", "thinking", "acting", "attention", "error", "hidden"]
@@ -77,11 +77,23 @@ class Settings(BaseModel):
     base_url: str = DEFAULT_GEMINI_BASE_URL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
     ollama_model: str = DEFAULT_OLLAMA_MODEL
+    ollama_summary_model: str = ""
+    ollama_cpu_only: bool = False
     translate_language: str = "English"
     # Logs every outgoing prompt (after redaction) so redaction can be verified (§10).
     debug_log_prompts: bool = False
     # Global "memory off" (§14): no reads into prompts, no writes.
     memory_enabled: bool = True
+    auto_web_lookup: bool = True
+    code_execution_enabled: bool = True
+    host_execution_enabled: bool = False
+    agent_max_steps: int = Field(default=24, ge=1, le=100)
+    agent_max_seconds: int = Field(default=600, ge=10, le=3600)
+    agent_max_output_tokens: int = Field(default=16000, ge=256, le=100000)
+    agent_max_failures: int = Field(default=3, ge=1, le=10)
+    use_model_router: bool = False
+    vision_mode: Literal["auto", "on", "off"] = "auto"
+    reasoning_effort: Literal["off", "auto", "low", "medium", "high"] = "off"
     # Domains that always require user confirmation even for LOW-tier browser tools (§13.2).
     sensitive_domains: list[str] = Field(default_factory=lambda: list(DEFAULT_SENSITIVE_DOMAINS))
     # Browser channel for Playwright: 'msedge' or 'chrome' (PLAN §5, §13.3).
@@ -125,9 +137,21 @@ class SettingsUpdate(BaseModel):
     base_url: str | None = Field(default=None, pattern=r"^https?://")
     ollama_base_url: str | None = Field(default=None, pattern=r"^https?://")
     ollama_model: str | None = None
+    ollama_summary_model: str | None = None
+    ollama_cpu_only: bool | None = None
     translate_language: str | None = Field(None, min_length=1)
     debug_log_prompts: bool | None = None
     memory_enabled: bool | None = None
+    auto_web_lookup: bool | None = None
+    code_execution_enabled: bool | None = None
+    host_execution_enabled: bool | None = None
+    agent_max_steps: int | None = Field(default=None, ge=1, le=100)
+    agent_max_seconds: int | None = Field(default=None, ge=10, le=3600)
+    agent_max_output_tokens: int | None = Field(default=None, ge=256, le=100000)
+    agent_max_failures: int | None = Field(default=None, ge=1, le=10)
+    use_model_router: bool | None = None
+    vision_mode: Literal["auto", "on", "off"] | None = None
+    reasoning_effort: Literal["off", "auto", "low", "medium", "high"] | None = None
     sensitive_domains: list[str] | None = None
     browser_channel: str | None = None
     browser_search_url: str | None = None
@@ -406,7 +430,7 @@ class TokenEvent(BaseModel):
 class RunDetailEvent(BaseModel):
     type: Literal["run.detail"] = "run.detail"
     run_id: str
-    kind: Literal["plan", "reasoning"]
+    kind: Literal["plan", "reasoning", "activity"]
     delta: str
 
 
@@ -437,12 +461,30 @@ class StepFinishedEvent(BaseModel):
     verified: bool | None
 
 
+class StepOutputEvent(BaseModel):
+    type: Literal["step.output"] = "step.output"
+    run_id: str
+    step_id: str
+    stream: Literal["stdout", "stderr", "result", "ui"] = "result"
+    text: str
+
+
+class RunMetrics(BaseModel):
+    model_calls: int
+    actions: int
+    elapsed_ms: int
+    model_ms: int = 0
+    tool_ms: int = 0
+
+
 class RunFinishedEvent(BaseModel):
     type: Literal["run.finished"] = "run.finished"
     run_id: str
     ok: bool
     text: str
     usage: Usage
+    status: Literal["done", "cancelled", "error"] | None = None
+    metrics: RunMetrics | None = None
 
 
 class RunErrorEvent(BaseModel):
@@ -486,6 +528,7 @@ ServerMessage = Annotated[
     | StepStartedEvent
     | ApprovalRequestEvent
     | StepFinishedEvent
+    | StepOutputEvent
     | RunFinishedEvent
     | RunErrorEvent
     | OrbStateEvent

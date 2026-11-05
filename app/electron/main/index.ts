@@ -185,7 +185,8 @@ ipcMain.on(IPC_TOGGLE_PANEL, () => togglePanel())
 ipcMain.on(IPC_OPEN_SETTINGS, () => openPanelInSettings())
 ipcMain.on(IPC_OPEN_PANEL_CHAT, (_e, handoff: unknown) => {
   const valid =
-    handoff && typeof handoff === 'object' && 'runId' in handoff && 'question' in handoff
+    handoff && typeof handoff === 'object' &&
+    (('runId' in handoff && 'question' in handoff) || 'contextId' in handoff)
       ? (handoff as PanelHandoff)
       : undefined
   openPanelWithHandoff(valid)

@@ -77,6 +77,8 @@ def test_ask_event_sequence(make_app: AppFactory) -> None:
             "ok": True,
             "text": "Hello",
             "usage": usage.model_dump(),
+            "status": None,
+            "metrics": None,
         },
         {"type": "orb.state", "state": "idle"},
     ]

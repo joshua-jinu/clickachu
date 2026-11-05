@@ -107,6 +107,34 @@ def test_user_text_follows_context_block(make_app: AppFactory, win32: FakeWin32)
     assert user.index("bonjour") < user.index("into German")
 
 
+def test_manual_summarise_uses_source_without_research_router(make_app, win32):
+    win32.focus = FocusedElement("Edit", "This project grows tomatoes in city gardens.")
+    app = make_app([TextDelta("It grows urban tomatoes."), Done()])
+    run_with_context(app, None, "summarise", settings={"auto_web_lookup": True})
+    calls = app.state.fake_provider.calls
+    assert len(calls) == 1
+    assert "city gardens" in calls[0]["messages"][-1]["content"]
+    assert "TL;DR" in calls[0]["messages"][0]["content"]
+
+
+def test_expired_selection_returns_reselect_message_without_model_call(make_app):
+    app = make_app([Done()])
+    with TestClient(app, base_url=BASE_URL) as client:
+        with client.websocket_connect(WS_URL) as ws:
+            ws.send_json({"type": "auth", "token": TOKEN})
+            ws.send_json(
+                {
+                    "type": "run",
+                    "run_id": "expired",
+                    "text": "summarise",
+                    "context_id": "ctx_expired",
+                }
+            )
+            error = receive_until(ws, "run.error")[-1]
+    assert "Alt+Q" in error["message"]
+    assert app.state.fake_provider.calls == []
+
+
 def test_translate_uses_target_language_setting(make_app: AppFactory, win32: FakeWin32) -> None:
     win32.focus = FocusedElement("Edit", "hello")
     app = make_app([Done()])

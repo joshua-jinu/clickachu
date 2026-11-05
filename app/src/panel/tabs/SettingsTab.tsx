@@ -6,6 +6,7 @@ import { useStore } from '@shared/store'
 import { buttonClass, errorText, inputClass } from '../ui'
 import { ProjectsSection } from './ProjectsSection'
 import { RootsSection } from './RootsSection'
+import { AgentSettings } from './AgentSettings'
 
 const GEMINI_DEFAULTS = {
   router_model: 'gemini-2.5-flash-lite',
@@ -143,8 +144,20 @@ function SettingsForm() {
         base_url: form.base_url,
         ollama_base_url: form.ollama_base_url,
         ollama_model: form.ollama_model,
+        ollama_summary_model: form.ollama_summary_model,
+        ollama_cpu_only: form.ollama_cpu_only,
         translate_language: form.translate_language,
         debug_log_prompts: form.debug_log_prompts,
+        auto_web_lookup: form.auto_web_lookup,
+        code_execution_enabled: form.code_execution_enabled,
+        host_execution_enabled: form.host_execution_enabled,
+        agent_max_steps: form.agent_max_steps,
+        agent_max_seconds: form.agent_max_seconds,
+        agent_max_output_tokens: form.agent_max_output_tokens,
+        agent_max_failures: form.agent_max_failures,
+        use_model_router: form.use_model_router,
+        vision_mode: form.vision_mode,
+        reasoning_effort: form.reasoning_effort,
         browser_channel: form.browser_channel,
         browser_search_url: form.browser_search_url,
         proactive_suggestions: form.proactive_suggestions,
@@ -354,8 +367,21 @@ function SettingsForm() {
         </div>
       )}
 
+      <AgentSettings form={form} onChange={setForm} />
+
       {/* General Settings */}
       <div className="space-y-2 border-t border-white/10 pt-3">
+        <label className="flex items-center gap-2 text-xs text-ck-muted">
+          <input
+            type="checkbox"
+            checked={form.auto_web_lookup}
+            onChange={(e) => setForm({ ...form, auto_web_lookup: e.target.checked })}
+          />
+          Look up factual topics online automatically
+        </label>
+        <p className="text-[11px] text-ck-muted">
+          Sends search terms to a public search engine in the background. No browser window is opened.
+        </p>
         <label className="block text-xs text-ck-muted">
           Translate to (default language)
           <input

@@ -131,6 +131,25 @@ Clickachu is designed with local-first security and defense against prompt injec
 - **Local Voice Transcription**: Speech-to-text runs locally on your machine via `faster-whisper` (`base.en`). Audio never leaves your PC.
 - **Process Supervision**: Background process monitoring runs within Windows Job Objects on your machine.
 
+### Background Web Research
+
+With automatic lookup enabled, the selected model classifies external factual questions for background
+research regardless of their wording or topic name. Recent-event language also forces a current lookup,
+and prompts use the computer's current date. Greetings and clear desktop actions skip this extra model
+call; other requests use a small classification call on the same model, not a second loaded model.
+Search terms are sent
+to a public search endpoint; this does not open Edge or use your browser profile. Disable automatic
+lookup in Settings to keep ordinary questions local; explicit online requests still search.
+The same selected model controls research through validated JSON decisions: choose a query and source,
+evaluate returned evidence, refine a query, switch sources, read a retrieved page, or answer with
+citations. Search transport does not rewrite topics or decide factual relevance by word overlap.
+The controller chooses Bing, Wikipedia search, or Google News, including an optional news time window.
+It can take at most five research actions per run, within the normal task time/token budgets.
+Repeated identical actions and citations to unobserved sources are rejected. Extra research rounds
+cost additional inference time on a local model; this does not guarantee every answer is correct. Public
+endpoints and source pages can block access or be unavailable. Clickachu reports those failures rather
+than treating them as proof that a topic does not exist. Local memory retrieval remains SQLite FTS5.
+
 ### What Goes to the LLM
 - Only the specific prompt and selected context necessary to answer your request are sent to Gemini.
 - **Secret Redaction**: Every outgoing prompt is scrubbed by `context/redact.py` before leaving your PC. API keys (`sk-...`, `AIza...`, `ghp_...`, AWS keys, bearer tokens) and passwords are automatically redacted to `[REDACTED]`.
@@ -214,3 +233,9 @@ uv run ruff check .  # Python linting and formatting
 ```
 
 See [docs/CHECKLIST.md](docs/CHECKLIST.md) for verification status and [docs/DEMO.md](docs/DEMO.md) for the end-to-end demo guide.
+
+## Hybrid agent runtime
+
+Clickachu supports isolated Python, individually approved host scripts, on-demand tool discovery,
+window observations/actions, and durable task checkpoints. See [the hybrid agent guide](docs/HYBRID_AGENT.md)
+for setup, permissions, model capabilities, and current limits.

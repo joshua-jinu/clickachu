@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from clickachu.automation.browser_worker import get_browser_worker
 from clickachu.tools.base import Tier, Tool, ToolContext, ToolResult, WorkerName
+from clickachu.tools.web_tools import blocked_page
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +95,14 @@ class BrowserSearchTool(Tool[BrowserSearchArgs]):
             page = await worker.open_url(url, run_id=ctx.run_id)
             title = await page.title()
             page_text, _ = await worker.read_snapshot(run_id=ctx.run_id)
+            if blocked_page(page.url, page_text):
+                return ToolResult(
+                    ok=False,
+                    summary=(
+                        "The search engine blocked access with a CAPTCHA. No results were read. "
+                        "This does not mean the topic does not exist. Use web_search instead."
+                    ),
+                )
             return ToolResult(
                 ok=True,
                 data={"url": page.url, "title": title, "query": args.query},
@@ -108,7 +117,9 @@ class BrowserSearchTool(Tool[BrowserSearchArgs]):
             return False
         worker = get_browser_worker()
         page = await worker.get_page()
-        return not page.is_closed() and "search" in page.url.lower()
+        return (
+            not page.is_closed() and not blocked_page(page.url, "") and "search" in page.url.lower()
+        )
 
 
 # ---------------------------------------------------------------- browser_read
@@ -138,6 +149,13 @@ class BrowserReadTool(Tool[BrowserReadArgs]):
         try:
             tree_text, ref_map = await worker.read_snapshot(run_id=ctx.run_id)
             page = await worker.get_page(run_id=ctx.run_id)
+            if blocked_page(page.url, tree_text):
+                return ToolResult(
+                    ok=False,
+                    summary=(
+                        "This page is blocked by an access challenge; no contents were retrieved."
+                    ),
+                )
             summary = f"Read page {page.url} ({len(ref_map)} interactive elements)"
             return ToolResult(
                 ok=True,
@@ -174,11 +192,16 @@ class BrowserScreenshotTool(Tool[BrowserScreenshotArgs]):
         worker = get_browser_worker()
         try:
             path = await worker.take_screenshot(run_id=ctx.run_id)
+            import base64
+            from pathlib import Path
+
+            payload = Path(path).read_bytes()
             return ToolResult(
                 ok=True,
                 data={"path": path},
                 summary=f"Saved browser screenshot to {path}",
                 untrusted_text=f"Screenshot captured at: {path}",
+                images=("data:image/png;base64," + base64.b64encode(payload).decode(),),
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, summary=f"Screenshot failed: {exc}")

@@ -241,6 +241,12 @@ export function MemoryTab() {
         />
         Memory {memoryOn ? 'on' : 'off'}
       </label>
+      {memoryOn && (
+        <p className="text-xs text-ck-muted">
+          Clear personal details and preferences you share are saved automatically.
+          You can edit, disable or delete them here.
+        </p>
+      )}
       {!memoryOn && (
         <p className="text-xs text-amber-300">
           Memory is off: nothing is saved and no memories are sent to the model.
@@ -258,7 +264,7 @@ export function MemoryTab() {
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {memories?.length === 0 && (
           <p className="text-xs text-ck-muted">
-            {query ? 'No matches.' : 'Nothing remembered yet. Try “Remember that I prefer pnpm”.'}
+            {query ? 'No matches.' : 'Nothing remembered yet. Tell Clickachu a detail such as “I prefer concise answers”.'}
           </p>
         )}
         {groups.map((g) => (

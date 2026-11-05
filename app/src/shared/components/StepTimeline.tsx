@@ -2,8 +2,9 @@
  * StepTimeline (PLAN §9.3): status icon (✓ / ✗ / spinner / ⏸), tool summary, duration,
  * verified tick, and expandable args / result details.
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { StepState } from '../store'
+import { isApprovalTimeout } from '../timeouts'
 
 function StatusIcon({ status }: { status: StepState['status'] }) {
   switch (status) {
@@ -53,6 +54,12 @@ function formatJson(raw: string | undefined): string {
 function StepRow({ step }: { step: StepState }) {
   const [expanded, setExpanded] = useState(false)
   const duration = formatDuration(step.durationMs)
+  const outputRef = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (outputRef.current && step.status === 'running') {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight
+    }
+  }, [step.output, step.status])
 
   return (
     <li className="rounded-md border border-ck-border bg-black/25 text-xs">
@@ -88,7 +95,8 @@ function StepRow({ step }: { step: StepState }) {
         {step.summary?.toLowerCase().includes('timed out') && (
           <span
             className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
-            title="Approval timed out (denied)"
+            title={isApprovalTimeout(step.summary)
+              ? 'Approval timed out (denied)' : 'Tool execution timed out'}
           >
             timed out
           </span>
@@ -101,9 +109,24 @@ function StepRow({ step }: { step: StepState }) {
             admin window
           </span>
         )}
-        {duration && <span className="shrink-0 tabular-nums text-ck-muted">{duration}</span>}
+        {duration && <span className="shrink-0 tabular-nums text-ck-muted"
+          title="Elapsed step time includes approval waits. Activity separates model and tool time.">
+          {duration}
+        </span>}
         <span className="shrink-0 text-[10px] text-ck-muted">{expanded ? '▾' : '▸'}</span>
       </button>
+      {step.output && (step.status === 'running' || expanded || step.tool === 'execute_code') && (
+        <div className="border-t border-ck-border px-2.5 py-2">
+          <p className="mb-1 text-[10px] text-ck-muted">
+            {step.outputStream === 'ui' ? 'Live UI observation' : 'Actual tool output'}
+            {step.status === 'running' ? ' · running' : ''}
+          </p>
+          <pre ref={outputRef} role="log" aria-label="Live tool output"
+            className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/60 p-2 font-mono text-[11px] text-ck-text">
+            {step.output}
+          </pre>
+        </div>
+      )}
       {expanded && (
         <div className="space-y-1.5 border-t border-ck-border px-2.5 py-2 font-mono text-[11px]">
           <div>

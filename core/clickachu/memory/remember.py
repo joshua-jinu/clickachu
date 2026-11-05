@@ -78,6 +78,8 @@ async def extract_memory(
     content = reply.get("content")
     if not isinstance(content, str) or not content.strip():
         return None
+    if not is_grounded_in_user_message(content, user_text):
+        return None
     category = reply.get("category")
     if category not in ("preference", "instruction", "fact"):
         category = "fact"

@@ -13,6 +13,7 @@ import { RunDetails } from '@shared/components/RunDetails'
 import type { ApprovalDecision } from '@shared/protocol'
 import { recordChatRun, startNewChat, useStore } from '@shared/store'
 import { stripVoiceTags } from '@shared/voiceSpeech'
+import { isApprovalTimeout } from '@shared/timeouts'
 import { ws } from '@shared/ws'
 import { ghostButtonClass } from '../ui'
 
@@ -71,13 +72,13 @@ function ChatTurn({ runId }: { runId: string }) {
             <div className="flex items-center gap-2 px-1 py-1 text-xs text-ck-muted">
               <span className="h-2 w-2 animate-pulse rounded-full bg-ck-violet" />
               <span className="ck-thinking">
-                {run.steps.length > 0 ? 'Executing steps…' : 'Thinking…'}
+                {run.activity || (run.steps.length > 0 ? 'Executing steps…' : 'Generating response…')}
               </span>
             </div>
           )
         )}
 
-        {run.status === 'error' && (
+        {run.status === 'error' && run.error !== run.text && (
           <div className="space-y-1.5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
             <p className="font-medium text-red-300">{run.error}</p>
             {run.error?.toLowerCase().includes('api key') && (
@@ -98,11 +99,11 @@ function ChatTurn({ runId }: { runId: string }) {
         )}
 
         {run.steps.some(
-          (st) => st.status === 'failed' && st.summary?.toLowerCase().includes('timed out'),
+          (st) => st.status === 'failed' && isApprovalTimeout(st.summary),
         ) && (
           <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200">
             <span>⚠️</span>
-            <span>Approval timed out after 5 minutes — action denied for safety.</span>
+            <span>Approval expired — this action was not authorized.</span>
           </div>
         )}
         {run.status === 'cancelled' && <p className="px-1 text-xs text-ck-muted">— cancelled</p>}
@@ -117,6 +118,7 @@ export function ChatTab() {
   const runs = useStore((s) => s.runs)
   const activeRunId = useStore((s) => s.activeRunId)
   const activeConversationId = useStore((s) => s.activeConversationId)
+  const activeContextId = useStore((s) => s.activeContextId)
   const activeRun = useStore((s) => (activeRunId ? s.runs[activeRunId] : undefined))
   const [prompt, setPrompt] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -150,8 +152,8 @@ export function ChatTab() {
       useStore.setState({ activeConversationId: convId })
     }
     const id = `run_${crypto.randomUUID()}`
-    recordChatRun({ runId: id, prompt: text })
-    if (ws.send({ type: 'run', run_id: id, text, conversation_id: convId })) {
+    recordChatRun({ runId: id, prompt: text, conversationId: convId, contextId: activeContextId })
+    if (ws.send({ type: 'run', run_id: id, text, conversation_id: convId, context_id: activeContextId })) {
       setPrompt('')
     } else {
       useStore.setState((s) => ({
@@ -166,6 +168,14 @@ export function ChatTab() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {activeContextId && (
+        <div className="flex items-center justify-between text-xs text-ck-muted">
+          <span>Selected text attached</span>
+          <button type="button" onClick={() => useStore.setState({ activeContextId: null })}>
+            Remove ×
+          </button>
+        </div>
+      )}
       {/* Minimal top session bar */}
       {history.length > 0 && (
         <div className="flex items-center justify-between pb-1 text-xs">

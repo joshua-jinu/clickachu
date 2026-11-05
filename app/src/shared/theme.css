@@ -155,11 +155,14 @@ html.ck-transparent body {
 }
 .ck-markdown table {
   border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
 }
 .ck-markdown th,
 .ck-markdown td {
   border: 1px solid var(--ck-border);
   padding: 0.25rem 0.5rem;
+  white-space: nowrap;
 }
 .ck-code pre {
   background: rgba(0, 0, 0, 0.45);

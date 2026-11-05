@@ -1,6 +1,7 @@
 """Process and project command tools (PLAN §13.3, §15)."""
 
 import logging
+import re
 from typing import ClassVar
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,73 @@ from clickachu.tools.base import Tier, Tool, ToolContext, ToolResult, WorkerName
 from clickachu.watchers.process_manager import get_process_manager
 
 log = logging.getLogger(__name__)
+
+
+def process_list_requested(text: str) -> bool:
+    """Live PC inspection, not an explanation of what processes are."""
+    if re.match(r"\s*(?:how|why|explain|what\s+is|what\s+are)\b", text, re.I):
+        return False
+    return bool(re.search(r"\b(?:processes|running\s+apps|task\s+list)\b", text, re.I)) and bool(
+        re.search(r"\b(?:check|list|show|display|running|scan)\b", text, re.I)
+    )
+
+
+class ListProcessesArgs(BaseModel):
+    name: str = Field(default="", description="Optional case-insensitive process-name filter")
+
+
+class ListProcessesTool(Tool[ListProcessesArgs]):
+    name: ClassVar[str] = "list_processes"
+    description: ClassVar[str] = (
+        "Read all running PC processes directly. Returns real PIDs, memory MiB and cumulative "
+        "CPU seconds, not CPU percent. Does not need a terminal or administrator rights."
+    )
+    Args: ClassVar[type[BaseModel]] = ListProcessesArgs
+    tier: ClassVar[Tier] = Tier.READ
+
+    def run(self, args: ListProcessesArgs, ctx: ToolContext) -> ToolResult:
+        import psutil
+
+        rows = []
+        for process in psutil.process_iter(
+            ["pid", "name", "memory_info", "cpu_times"], ad_value=None
+        ):
+            try:
+                info = process.info
+                name = info["name"] or "(restricted)"
+                if args.name and args.name.casefold() not in name.casefold():
+                    continue
+                memory, cpu = info["memory_info"], info["cpu_times"]
+                rows.append(
+                    {
+                        "name": name,
+                        "pid": info["pid"],
+                        "memory_mib": round(memory.rss / 1048576, 1) if memory else None,
+                        "cpu_seconds": round(cpu.user + cpu.system, 1) if cpu else None,
+                    }
+                )
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        rows.sort(key=lambda row: row["memory_mib"] or 0, reverse=True)
+        lines = [
+            f"{len(rows)} running processes, sorted by memory.",
+            "",
+            "| Process | PID | Memory (MiB) | CPU time (s) |",
+            "|---|---:|---:|---:|",
+        ]
+        for row in rows:
+            name = row["name"].replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+            lines.append(
+                f"| {name} | {row['pid']} | "
+                f"{row['memory_mib'] if row['memory_mib'] is not None else '—'} | "
+                f"{row['cpu_seconds'] if row['cpu_seconds'] is not None else '—'} |"
+            )
+        return ToolResult(
+            ok=True,
+            summary=f"Read {len(rows)} running processes.",
+            data=rows,
+            untrusted_text="\n".join(lines),
+        )
 
 
 # ---------------------------------------------------------------- get_process_logs
@@ -138,9 +206,8 @@ class RunProjectCommandTool(Tool[RunProjectCommandArgs]):
         # Register unverified cleanup: if run is cancelled before verification, stop it
         ctx.unverified_cleanup.append(lambda: pm.stop(proc_name))
 
-        summary = (
-            f"Started {proc_name} (pid {managed.pid})"
-            + (f" listening on port {cmd_entry.port}" if cmd_entry.port else "")
+        summary = f"Started {proc_name} (pid {managed.pid})" + (
+            f" listening on port {cmd_entry.port}" if cmd_entry.port else ""
         )
         return ToolResult(
             ok=True,

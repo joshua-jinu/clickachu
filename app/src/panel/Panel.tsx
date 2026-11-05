@@ -1,7 +1,7 @@
 /** Side panel (PLAN §9.3): sleek header + segmented tabs (Chat · Memory · Log · Settings), sliding in from the right. */
 import { useEffect, useState } from 'react'
 import { ReconnectingBanner } from '@shared/components/ReconnectingBanner'
-import { recordChatRun, useStore } from '@shared/store'
+import { applyPanelHandoff, useStore } from '@shared/store'
 import { ws } from '@shared/ws'
 import { ChatTab } from './tabs/ChatTab'
 import { LogTab } from './tabs/LogTab'
@@ -110,12 +110,7 @@ export function Panel() {
   useEffect(
     () =>
       window.clickachu.onPanelHandoff((handoff) => {
-        recordChatRun({
-          runId: handoff.runId,
-          prompt: handoff.question,
-          answer: handoff.answer,
-          mode: handoff.mode,
-        })
+        applyPanelHandoff(handoff)
         setTab('chat')
       }),
     [],

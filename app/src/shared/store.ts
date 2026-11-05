@@ -1,7 +1,8 @@
 /** Shared renderer state (Zustand), fed by WebSocket events. */
 import { create } from 'zustand'
 import { api } from './api'
-import type { MemoryRef, OrbStateName, RunMode, Tier, Usage } from './protocol'
+import type { PanelHandoff } from './bridge'
+import type { MemoryRef, OrbStateName, RunMode, RunMetrics, Tier, Usage } from './protocol'
 import type { ConnectionStatus, WsClient } from './ws'
 
 export type RunStatus = 'running' | 'done' | 'cancelled' | 'error'
@@ -19,11 +20,15 @@ export interface StepState {
   argsJson?: string
   resultSummary?: string
   preview?: string
+  output?: string
+  outputStream?: string
   decision?: string
 }
 
 export interface RunState {
   mode: RunMode
+  conversationId?: string
+  contextId?: string | null
   prompt?: string
   text: string
   steps: StepState[]
@@ -34,6 +39,8 @@ export interface RunState {
   finishedAt?: number
   plan?: string
   reasoning?: string
+  activity?: string
+  metrics?: RunMetrics | null
 }
 
 export interface DailyUsage {
@@ -93,6 +100,8 @@ interface ClickachuState {
   todayUsage: DailyUsage
   /** Current active conversation ID (groups multiple run turns into one session). */
   activeConversationId: string | null
+  /** Selected source carried into follow-up turns; cleared by New chat or dropping it. */
+  activeContextId: string | null
 }
 
 export const useStore = create<ClickachuState>(() => ({
@@ -105,16 +114,36 @@ export const useStore = create<ClickachuState>(() => ({
   lastSaved: null,
   todayUsage: loadDailyUsage(),
   activeConversationId: null,
+  activeContextId: null,
 }))
 
 export function startNewChat(): void {
   useStore.setState({
     activeConversationId: `conv_${crypto.randomUUID()}`,
+    activeContextId: null,
     chatHistory: [],
   })
 }
 
 let savedSeq = 0
+
+export function applyPanelHandoff(handoff: PanelHandoff): void {
+  if (handoff.runId) {
+    recordChatRun({
+      runId: handoff.runId,
+      prompt: handoff.question ?? '',
+      answer: handoff.answer,
+      mode: handoff.mode,
+      conversationId: handoff.conversationId,
+      contextId: handoff.contextId,
+    })
+  } else {
+    useStore.setState((s) => ({
+      activeConversationId: handoff.conversationId ?? s.activeConversationId,
+      activeContextId: handoff.contextId !== undefined ? handoff.contextId : s.activeContextId,
+    }))
+  }
+}
 
 function endRun(runId: string): Partial<ClickachuState> {
   const { activeRunId } = useStore.getState()
@@ -142,9 +171,15 @@ export function recordChatRun(opts: {
   prompt: string
   answer?: string
   mode?: RunMode
+  conversationId?: string
+  contextId?: string | null
 }): void {
   useStore.setState((s) => {
     const existing = s.runs[opts.runId]
+    const conversationId = opts.conversationId ?? existing?.conversationId ?? s.activeConversationId
+    const contextId = opts.contextId !== undefined ? opts.contextId
+      : existing?.contextId !== undefined ? existing.contextId
+      : conversationId === s.activeConversationId ? s.activeContextId : null
     const nextRun: RunState = existing
       ? {
           ...existing,
@@ -162,7 +197,9 @@ export function recordChatRun(opts: {
         }
     const inHistory = s.chatHistory.includes(opts.runId)
     return {
-      runs: { ...s.runs, [opts.runId]: nextRun },
+      runs: { ...s.runs, [opts.runId]: { ...nextRun, conversationId: conversationId ?? undefined, contextId } },
+      activeConversationId: conversationId,
+      activeContextId: contextId,
       chatHistory: inHistory ? s.chatHistory : [...s.chatHistory, opts.runId],
       lastRunId: opts.runId,
       ...(nextRun.status === 'running' ? { activeRunId: opts.runId } : {}),
@@ -214,7 +251,7 @@ export function bindStore(client: WsClient): () => void {
     }),
     client.on('token', (m) => patchRun(m.run_id, (run) => ({ text: run.text + m.delta }))),
     client.on('run.detail', (m) => patchRun(m.run_id, (run) => ({
-      [m.kind]: (run[m.kind] ?? '') + m.delta,
+      [m.kind]: m.kind === 'activity' ? m.delta : (run[m.kind] ?? '') + m.delta,
     }))),
     client.on('step.started', (m) =>
       patchRun(m.run_id, (run) => ({
@@ -241,6 +278,17 @@ export function bindStore(client: WsClient): () => void {
         preview: m.preview,
       }),
     ),
+    client.on('step.output', (m) => {
+      useStore.setState((s) => {
+        const run = s.runs[m.run_id]
+        if (!run) return {}
+        return { runs: { ...s.runs, [m.run_id]: { ...run,
+          steps: run.steps.map((step) => step.step_id === m.step_id
+            ? { ...step, output: ((step.output ?? '') + m.text).slice(-48000), outputStream: m.stream }
+            : step),
+        } } }
+      })
+    }),
     client.on('step.finished', (m) => {
       useStore.setState((s) => {
         const run = s.runs[m.run_id]
@@ -273,7 +321,9 @@ export function bindStore(client: WsClient): () => void {
       patchRun(m.run_id, () => ({
         text: m.text,
         usage: m.usage,
-        status: m.ok ? 'done' : 'cancelled',
+        metrics: m.metrics,
+        status: m.status ?? (m.ok ? 'done' : 'cancelled'),
+        error: m.status === 'error' ? m.text : undefined,
         finishedAt: Date.now(),
       }))
       if (m.usage) {
