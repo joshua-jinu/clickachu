@@ -35,6 +35,7 @@ class ToolResult:
     data: Any = None
     summary: str = ""
     untrusted_text: str | None = None
+    images: tuple[str, ...] = ()
 
     def llm_text(self) -> str:
         """Text payload to wrap inside `<untrusted_data source="tool:...">` (§12)."""
@@ -98,6 +99,7 @@ class ToolContext:
     step_id: str
     snapshot: ContextSnapshot | None
     db: Database
+    conversation_id: str = ""
     workers: ToolWorkers = field(default_factory=ToolWorkers)
     user_text: str = ""
     memory: MemoryService | None = None

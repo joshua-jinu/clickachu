@@ -18,6 +18,14 @@ dependencies = [
     "faster-whisper",
     "sounddevice",
     "numpy",
+    "pillow",
+    "winrt-Windows.Media.Control; sys_platform == 'win32'",
+    "uiautomation>=2.0.29 ; sys_platform == 'win32'",
+    "winrt-windows-media-ocr>=4!10.0.28000.2957 ; sys_platform == 'win32'",
+    "winrt-windows-graphics-imaging>=4!10.0.28000.2957 ; sys_platform == 'win32'",
+    "trafilatura>=2.3.1",
+    "ddgs>=9.16.1",
+    "winrt-windows-globalization>=4!10.0.28000.2957 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

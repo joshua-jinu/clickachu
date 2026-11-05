@@ -2,6 +2,7 @@
 import { type ComponentPropsWithoutRef, memo, useRef } from 'react'
 import ReactMarkdown, { type ExtraProps, type Options } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
+import remarkGfm from 'remark-gfm'
 import { stripVoiceTags } from '../voiceSpeech'
 import { CopyButton } from './CopyButton'
 
@@ -20,7 +21,12 @@ function CodeBlock(props: ComponentPropsWithoutRef<'pre'> & ExtraProps) {
   )
 }
 
-const components = { pre: CodeBlock }
+function ScrollableTable({ node, ...props }: ComponentPropsWithoutRef<'table'> & ExtraProps) {
+  void node
+  return <div className="max-w-full overflow-x-auto"><table {...props} /></div>
+}
+
+const components = { pre: CodeBlock, table: ScrollableTable }
 const rehypePlugins: Options['rehypePlugins'] = [[rehypeHighlight, { detect: true }]]
 
 function extractThoughts(raw: string): { thoughts: string[]; content: string; isThinking: boolean } {
@@ -72,7 +78,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       ))}
 
       {content ? (
-        <ReactMarkdown components={components} rehypePlugins={rehypePlugins}>
+        <ReactMarkdown components={components} rehypePlugins={rehypePlugins} remarkPlugins={[remarkGfm]}>
           {content}
         </ReactMarkdown>
       ) : null}

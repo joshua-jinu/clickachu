@@ -293,6 +293,27 @@ def decide(
             log_decision="blocked",
         )
 
+    # Arbitrary host code and UI gestures must never inherit a wildcard "Always" grant.
+    if tool.name == "execute_code":
+        if getattr(args, "environment", "host") == "isolated":
+            return PolicyDecision(action=PolicyAction.AUTO, reason="isolated task workspace")
+        for path in tool.write_paths(args):
+            if err := check_path_allowed(path, roots, require_write=True):
+                return PolicyDecision(action=PolicyAction.DENY, reason=err, log_decision="blocked")
+        return PolicyDecision(action=PolicyAction.ASK, reason="individual host script approval")
+    if tool.name == "desktop_action":
+        return PolicyDecision(action=PolicyAction.ASK, reason="approve observed desktop action")
+    if tool.name == "workspace_files" and getattr(args, "operation", "export") != "export":
+        for path in tool.read_paths(args):
+            if err := check_path_allowed(path, roots, require_write=False):
+                return PolicyDecision(action=PolicyAction.DENY, reason=err, log_decision="blocked")
+        return PolicyDecision(action=PolicyAction.AUTO, reason="task workspace access")
+    if tool.name == "workspace_files":
+        for path in tool.write_paths(args):
+            if err := check_path_allowed(path, roots, require_write=True):
+                return PolicyDecision(action=PolicyAction.DENY, reason=err, log_decision="blocked")
+        return PolicyDecision(action=PolicyAction.ASK, reason="export task artifact")
+
     for read_path in tool.read_paths(args):
         if err := check_path_allowed(read_path, roots, require_write=False):
             return PolicyDecision(action=PolicyAction.DENY, reason=err, log_decision="blocked")

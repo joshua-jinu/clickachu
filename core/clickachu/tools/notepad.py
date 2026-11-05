@@ -57,7 +57,8 @@ def _foreground_notepad(api: RealWin32, expected_hwnd: int | None = None) -> int
 
 
 def _normalise(text: str) -> str:
-    return text.replace("\r\n", "\n").rstrip("\r\n")
+    # UIA RichEdit can expose paragraph breaks as CR or Unicode paragraph separators.
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\u2029", "\n").rstrip("\n\0")
 
 
 class WriteNotepadArgs(BaseModel):

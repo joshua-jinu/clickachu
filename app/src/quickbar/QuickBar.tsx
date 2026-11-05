@@ -166,7 +166,7 @@ export function QuickBar() {
   const ignoreNextTranscriptRef = useRef(false)
   const spokenRunIdRef = useRef<string | null>(null)
   const handedOffSetRef = useRef<Set<string>>(new Set())
-  const runActionRef = useRef<(action: RunAction, explicitContextId?: string) => void>(
+  const runActionRef = useRef<(action: RunAction, explicitContextId?: string | null) => void>(
     () => undefined,
   )
 
@@ -382,6 +382,8 @@ export function QuickBar() {
         question: last.question,
         answer: lastRun.text || undefined,
         mode: lastRun.mode,
+        conversationId: lastRun.conversationId,
+        contextId: lastRun.contextId ?? null,
         keepHudOpen: true,
       })
     }
@@ -418,7 +420,7 @@ export function QuickBar() {
             if (initialAction) {
               setIsListening(false)
               requestAnimationFrame(() => {
-                runActionRef.current(initialAction, captured?.id)
+                runActionRef.current(initialAction, captured?.id ?? null)
               })
             } else {
               // Default mic ON when opened from the Orb or voice hotkey
@@ -451,13 +453,14 @@ export function QuickBar() {
       append: boolean,
       action?: RunAction,
       mode?: RunMode,
-      explicitContextId?: string,
+      explicitContextId?: string | null,
     ) => {
       speechEngine.stop()
       const runId = `run_${crypto.randomUUID()}`
       const conversationId = useStore.getState().activeConversationId || `conv_${crypto.randomUUID()}`
       useStore.setState({ activeConversationId: conversationId })
-      recordChatRun({ runId, prompt: question, mode })
+      const sourceId = explicitContextId !== undefined ? explicitContextId : contextId ?? null
+      recordChatRun({ runId, prompt: question, mode, conversationId, contextId: sourceId })
       if (
         !ws.send({
           type: 'run',
@@ -466,7 +469,7 @@ export function QuickBar() {
           text,
           mode,
           action,
-          context_id: explicitContextId ?? contextId,
+          context_id: sourceId,
         })
       ) {
         useStore.setState((s) => ({
@@ -490,6 +493,8 @@ export function QuickBar() {
           runId,
           question,
           mode: 'agent',
+          conversationId,
+          contextId: sourceId,
           keepHudOpen: true,
         })
       }
@@ -498,7 +503,7 @@ export function QuickBar() {
     [contextId],
   )
 
-  function runAction(action: RunAction, explicitContextId?: string) {
+  function runAction(action: RunAction, explicitContextId?: string | null) {
     if (isListening) void stopMic(true)
     if (action === 'do') {
       const typed = prompt.trim()
@@ -615,8 +620,16 @@ export function QuickBar() {
       question: last.question,
       answer: lastRun?.text,
       mode: lastRun?.mode,
+      conversationId: lastRun?.conversationId,
+      contextId: selectionDropped ? null : lastRun?.contextId ?? null,
       keepHudOpen: false,
     })
+  }
+
+  function openPanelWithSelection() {
+    const conversationId = useStore.getState().activeConversationId || `conv_${crypto.randomUUID()}`
+    useStore.setState({ activeConversationId: conversationId })
+    window.clickachu.openPanelInChat({ conversationId, contextId: contextId ?? null })
   }
 
   function sendPrompt() {
@@ -690,9 +703,9 @@ export function QuickBar() {
       : running
         ? lastRun?.steps.some((s) => s.status === 'awaiting_approval')
           ? 'Waiting for your approval in Side Panel…'
-          : lastRun?.steps.length
-            ? `Running ${lastRun.steps.at(-1)?.tool ?? 'task'}…`
-            : 'Thinking…'
+          : lastRun?.steps.some((s) => s.status === 'running')
+            ? `Running ${lastRun.steps.find((s) => s.status === 'running')?.tool ?? 'task'}…`
+            : lastRun?.activity || 'Generating response…'
         : prompt.trim().length > 0
           ? 'Focused on text · Press Enter to send'
           : 'Click orb to speak, or type below'
@@ -727,6 +740,7 @@ export function QuickBar() {
                 onDrop={() => {
                   setSelectionDropped(true)
                   setShowSelection(false)
+                  useStore.setState({ activeContextId: null })
                 }}
               />
             ) : (
@@ -751,8 +765,8 @@ export function QuickBar() {
             </button>
             <button
               type="button"
-              onClick={() => window.clickachu.togglePanel()}
-              title="Toggle Side Panel (Ctrl+Alt+P)"
+              onClick={openPanelWithSelection}
+              title="Open Side Panel with this selection (Ctrl+Alt+P toggles panel)"
               className="flex h-7 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-ck-muted transition-colors hover:border-white/20 hover:text-ck-text"
             >
               <span>Panel</span>

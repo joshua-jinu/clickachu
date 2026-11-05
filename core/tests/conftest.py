@@ -22,6 +22,18 @@ BASE_URL = f"http://127.0.0.1:{PORT}"
 WS_URL = f"ws://127.0.0.1:{PORT}/ws"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
+
+@pytest.fixture(autouse=True)
+def no_unexpected_search_network(monkeypatch):
+    """Unit tests must never silently query public search engines."""
+    from ddgs import DDGS
+
+    def disabled(*args, **kwargs):
+        raise RuntimeError("Public search transport must be stubbed in unit tests")
+
+    monkeypatch.setattr(DDGS, "text", disabled)
+
+
 AppFactory = Callable[..., FastAPI]
 
 
@@ -36,7 +48,10 @@ def db(tmp_path: Path) -> Iterator[Database]:
 def settings_store(db: Database) -> SettingsStore:
     store = SettingsStore(db)
     store.update(
-        SettingsUpdate(ask_model="test/ask-model", agent_model="test/agent-model")
+        # Unit tests opt into web lookup explicitly with a fake search tool, never real network.
+        SettingsUpdate(
+            ask_model="test/ask-model", agent_model="test/agent-model", auto_web_lookup=False
+        )
     )
     return store
 

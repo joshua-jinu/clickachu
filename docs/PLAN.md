@@ -504,6 +504,8 @@ Sensitive domains: banking/payment/email-send patterns (configurable list).
 | `get_process_logs(name, lines≤200)` | read | io | — |
 | `browser_open(url)` | low | browser | page loaded |
 | `browser_search(query)` | low | browser | results present |
+| `web_search(query)` | read | io | usable public search results, no browser |
+| `web_fetch(url)` | read | io | public source text retrieved in background |
 | `browser_read()` → aria snapshot with refs | read | browser | — |
 | `browser_screenshot()` | read | browser | — |
 | `browser_click(ref)` | low | browser | navigation/DOM change |
@@ -531,8 +533,10 @@ process name **and** title (Windows 11 Notepad hands off to another process).
 
 ## §14 Memory (`memory/`)
 
-Memory retrieval uses local SQLite FTS5. It does not provide web access: explicit online requests
-must be routed to agent mode with browser tools. Browser reads include page text as well as controls.
+Memory retrieval uses local SQLite FTS5. Background research uses `web_search` and `web_fetch`,
+without opening a browser. Automatic lookup for short factual/entity questions is enabled by default
+and can be disabled in Settings. Blocked sources and CAPTCHA pages are failures, not empty results.
+Browser tools remain available for interactive website tasks.
 
 
 - **Write paths:** user says "remember …" (agent calls `remember`), approving a project profile,

@@ -70,7 +70,7 @@ class AppConfig:
     ws_auth_timeout_s: float = 2.0
 
 
-_provider_cache: dict[tuple[str, str], LLMProvider] = {}
+_provider_cache: dict[tuple[str, str, str, bool, str], LLMProvider] = {}
 
 
 def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
@@ -79,11 +79,23 @@ def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
 
     base_url = settings.active_base_url
     key = api_key if settings.provider == "gemini" else (api_key or "ollama")
-    cache_key = (base_url, key)
+    cache_key = (
+        base_url,
+        key,
+        settings.reasoning_effort,
+        settings.ollama_cpu_only,
+        settings.ollama_summary_model,
+    )
     cached = _provider_cache.get(cache_key)
     if cached is not None:
         return cached
-    prov = OpenRouterProvider(base_url=base_url, api_key=key)
+    prov = OpenRouterProvider(
+        base_url=base_url,
+        api_key=key,
+        reasoning_effort=settings.reasoning_effort,
+        ollama_cpu_only=settings.ollama_cpu_only,
+        summary_model=settings.ollama_summary_model,
+    )
     _provider_cache[cache_key] = prov
     return prov
 

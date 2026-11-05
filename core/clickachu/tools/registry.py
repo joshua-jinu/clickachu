@@ -1,5 +1,7 @@
 """Tool registry and OpenAI function-calling schema generation (PLAN §13.1)."""
 
+import re
+from copy import deepcopy
 from typing import Any
 
 from clickachu.llm.router import notepad_write_requested, web_lookup_requested
@@ -13,6 +15,12 @@ from clickachu.tools.browser_tools import (
     BrowserSearchTool,
     BrowserSubmitTool,
 )
+from clickachu.tools.computer import (
+    DesktopActionTool,
+    ObserveDesktopTool,
+    WaitForUITool,
+    current_observation,
+)
 from clickachu.tools.desktop import (
     FocusWindowTool,
     GetActiveContextTool,
@@ -21,6 +29,8 @@ from clickachu.tools.desktop import (
     OpenAppTool,
     TypeTextTool,
 )
+from clickachu.tools.discovery import DiscoverToolsTool
+from clickachu.tools.execution import ExecuteCodeTool
 from clickachu.tools.files import (
     CreateFolderTool,
     MoveFileTool,
@@ -31,13 +41,17 @@ from clickachu.tools.files import (
     TrashFileTool,
     WriteFileTool,
 )
+from clickachu.tools.media import ControlMediaTool
 from clickachu.tools.memory_tools import RecallTool, RememberTool
 from clickachu.tools.notepad import WriteNotepadTool
 from clickachu.tools.process_tools import (
     GetProcessLogsTool,
+    ListProcessesTool,
     RunProjectCommandTool,
     StopProcessTool,
 )
+from clickachu.tools.web_tools import WebFetchTool, WebSearchTool
+from clickachu.tools.workspace import WorkspaceFilesTool
 
 
 class ToolRegistry:
@@ -94,10 +108,8 @@ class ToolRegistry:
         if web_lookup_requested(prompt):
             return self.schemas(
                 names=[
-                    "browser_search",
-                    "browser_read",
-                    "browser_open",
-                    "browser_click",
+                    "web_search",
+                    "web_fetch",
                 ]
             )
         is_file = any(
@@ -196,6 +208,73 @@ class ToolRegistry:
             return self.schemas()
         return self.schemas(names=list(selected_names))
 
+    def bind_ui_state(self, schemas, run_id):
+        """Only expose real, current native refs; never ask a model to invent observation IDs."""
+        if not isinstance(self.get("desktop_action"), DesktopActionTool):
+            return schemas  # Integration tools can have their own observation mechanism.
+        current = current_observation(run_id)
+        bound = []
+        for schema in schemas:
+            if schema["function"]["name"] != "desktop_action":
+                bound.append(schema)
+                continue
+            if current is None:
+                continue  # Inspect first. No action can be grounded without an observation.
+            key, observation = current
+            item = deepcopy(schema)
+            properties = item["function"]["parameters"]["properties"]
+            properties["observation_id"]["enum"] = [key]
+            properties["ref"]["enum"] = ["", *observation.controls]
+            if not observation.visual:
+                properties.pop("x", None)
+                properties.pop("y", None)
+            bound.append(item)
+        return bound
+
+    def hybrid_schemas(self, prompt: str) -> list[dict[str, Any]]:
+        # Custom registries (including integrations and tests) retain their own tool set.
+        if self.get("discover_tools") is None:
+            return self.schemas()
+        names = {"discover_tools", "get_active_context"}
+        p = prompt.lower()
+        if notepad_write_requested(prompt):
+            names.add("write_notepad")
+        elif web_lookup_requested(prompt):
+            names.update(("web_search", "web_fetch"))
+        elif re.search(r"\b(?:play|pause|resume|music|media)\b", p):
+            names.update(
+                (
+                    "control_media",
+                    "open_app",
+                    "observe_desktop",
+                    "desktop_action",
+                    "wait_for_ui",
+                    "list_windows",
+                )
+            )
+        elif any(term in p for term in ("browser", "website", "http", "web page")):
+            names.update(("browser_open", "browser_read", "browser_click", "browser_fill"))
+        elif any(
+            term in p
+            for term in ("window", "app", "click", "type", "screen", "open", "store", "search in")
+        ):
+            names.update(
+                (
+                    "list_windows",
+                    "open_app",
+                    "observe_desktop",
+                    "desktop_action",
+                    "wait_for_ui",
+                )
+            )
+        elif "process" in p:
+            names.add("list_processes")
+        else:
+            names.update(("execute_code", "search_files", "read_file", "write_file"))
+        if re.search(r"\b(?:code|script|python|powershell|terminal|batch|calculate|data)\b", p):
+            names.add("execute_code")
+        return self.schemas(names=list(names))
+
 
 def _clean_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Flatten Optional[T] `anyOf` unions and strip titles for Gemini/OpenAI compatibility."""
@@ -231,6 +310,12 @@ def _clean_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 def create_default_registry() -> ToolRegistry:
     reg = ToolRegistry()
+    reg.register(ExecuteCodeTool())
+    reg.register(WorkspaceFilesTool())
+    reg.register(ObserveDesktopTool())
+    reg.register(DesktopActionTool())
+    reg.register(WaitForUITool())
+    reg.register(DiscoverToolsTool(reg))
     # Memory
     reg.register(RecallTool())
     reg.register(RememberTool())
@@ -242,6 +327,9 @@ def create_default_registry() -> ToolRegistry:
     reg.register(FocusWindowTool())
     reg.register(TypeTextTool())
     reg.register(WriteNotepadTool())
+    reg.register(ControlMediaTool())
+    reg.register(WebSearchTool())
+    reg.register(WebFetchTool())
     # Files
     reg.register(SearchFilesTool())
     reg.register(ReadFileTool())
@@ -253,6 +341,7 @@ def create_default_registry() -> ToolRegistry:
     reg.register(TrashFileTool())
     # Processes
     reg.register(GetProcessLogsTool())
+    reg.register(ListProcessesTool())
     reg.register(StopProcessTool())
     reg.register(RunProjectCommandTool())
     # Browser

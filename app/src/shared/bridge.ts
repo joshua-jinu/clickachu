@@ -25,8 +25,11 @@ export interface QuickBarShown {
 
 /** Payload when the quick bar hands an agent run or an Ask answer off to the side panel (§9.2, §9.3). */
 export interface PanelHandoff {
-  runId: string
-  question: string
+  /** Omitted when opening the panel with a selection before submitting a run. */
+  runId?: string
+  question?: string
+  conversationId?: string
+  contextId?: string | null
   answer?: string
   mode?: RunMode
   /** When true, the 3D Orb HUD stays open and focused while the side panel slides in with details. */

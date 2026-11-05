@@ -6,7 +6,7 @@
 
 export type RunAction = 'summarise' | 'explain' | 'translate' | 'rewrite' | 'fix' | 'ask' | 'do'
 export type RunMode = 'ask' | 'agent'
-export type ApprovalDecision = 'approve' | 'always' | 'deny'
+export type ApprovalDecision = 'approve' | 'always' | 'task' | 'deny'
 export type SuggestionDecision = 'accept' | 'dismiss' | 'later'
 export type Tier = 'read' | 'low' | 'confirm' | 'blocked'
 export type OrbStateName =
@@ -54,11 +54,23 @@ export interface Settings {
   base_url: string
   ollama_base_url: string
   ollama_model: string
+  ollama_summary_model: string
+  ollama_cpu_only: boolean
   translate_language: string
   /** Logs every outgoing prompt (after redaction) so redaction can be verified (§10). */
   debug_log_prompts: boolean
   /** Global "memory off" (§14): no reads into prompts, no writes. */
   memory_enabled: boolean
+  auto_web_lookup: boolean
+  code_execution_enabled: boolean
+  host_execution_enabled: boolean
+  agent_max_steps: number
+  agent_max_seconds: number
+  agent_max_output_tokens: number
+  agent_max_failures: number
+  use_model_router: boolean
+  vision_mode: 'auto' | 'on' | 'off'
+  reasoning_effort: 'off' | 'auto' | 'low' | 'medium' | 'high'
   /** Domains that always require user confirmation even for LOW-tier browser tools (§13.2). */
   sensitive_domains: string[]
   /** Browser channel for Playwright: 'msedge' or 'chrome' (PLAN §5, §13.3). */
@@ -338,7 +350,7 @@ export interface TokenEvent {
 export interface RunDetailEvent {
   type: 'run.detail'
   run_id: string
-  kind: 'plan' | 'reasoning'
+  kind: 'plan' | 'reasoning' | 'activity'
   delta: string
 }
 
@@ -369,12 +381,30 @@ export interface StepFinishedEvent {
   verified: boolean | null
 }
 
+export interface StepOutputEvent {
+  type: 'step.output'
+  run_id: string
+  step_id: string
+  stream: 'stdout' | 'stderr' | 'result' | 'ui'
+  text: string
+}
+
+export interface RunMetrics {
+  model_calls: number
+  actions: number
+  elapsed_ms: number
+  model_ms?: number
+  tool_ms?: number
+}
+
 export interface RunFinishedEvent {
   type: 'run.finished'
   run_id: string
   ok: boolean
   text: string
   usage: Usage
+  status?: 'done' | 'cancelled' | 'error' | null
+  metrics?: RunMetrics | null
 }
 
 export interface RunErrorEvent {
@@ -418,6 +448,7 @@ export type ServerMessage =
   | StepStartedEvent
   | ApprovalRequestEvent
   | StepFinishedEvent
+  | StepOutputEvent
   | RunFinishedEvent
   | RunErrorEvent
   | OrbStateEvent

@@ -35,14 +35,17 @@ export async function captureContext(sidecar: Sidecar): Promise<ContextSnapshot 
 
 export function createOpenWithContext(sidecar: Sidecar): () => void {
   return () => {
-    // Already open: the bar is foreground, so there is nothing to capture; just refocus it.
-    if (quickBarWindow()?.isVisible() || capturing) {
-      openQuickBar(null)
+    // A visible HUD may be behind the source app. Capture before taking focus, and never
+    // steal focus while an earlier capture is still reading that app's selection.
+    if (capturing) return
+    const bar = quickBarWindow()
+    if (bar?.isFocused()) {
+      bar.focus()
       return
     }
     capturing = true
     void captureContext(sidecar)
-      .then((context) => openQuickBar(context))
+      .then((context) => openQuickBar(context, undefined, false))
       .finally(() => {
         capturing = false
       })

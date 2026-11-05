@@ -114,13 +114,19 @@ export function ApprovalCard({ step, onDecide }: ApprovalCardProps) {
         >
           Approve
         </button>
-        <button
+        {step.tool === 'desktop_action' && (
+          <button type="button" onClick={() => onDecide('task')}
+            className="rounded-md border border-ck-violet/60 px-3 py-1 text-xs text-ck-text">
+            Allow this window for this task
+          </button>
+        )}
+        {!['execute_code', 'desktop_action', 'workspace_files'].includes(step.tool) && <button
           type="button"
           onClick={() => onDecide('always')}
           className="rounded-md border border-ck-violet/60 bg-ck-violet/20 px-3 py-1 text-xs font-medium text-ck-text hover:bg-ck-violet/30"
         >
           Always
-        </button>
+        </button>}
         <button
           type="button"
           onClick={() => onDecide('deny')}

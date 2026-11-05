@@ -94,14 +94,18 @@ class BlockedDangerTool(Tool[DeployArgs]):
         ("what model are you", None, None, "ask"),
         ("hi", None, None, "ask"),
         ("who are you", None, None, "ask"),
-        ("can you oppen notepad and write a recepie for choco chip cookie and then save it as ultimate chocochip cookie in my onedrive desktop", None, None, "agent"),
+        (
+            "can you oppen notepad and write a recepie for choco chip cookie "
+            "and then save it as ultimate chocochip cookie in my onedrive desktop",
+            None,
+            None,
+            "agent",
+        ),
         ("okay do it", None, None, "agent"),
         ("do it", None, None, "agent"),
     ],
 )
-def test_router_heuristics(
-    text: str, mode: Any, action: Any, expected: str | None
-) -> None:
+def test_router_heuristics(text: str, mode: Any, action: Any, expected: str | None) -> None:
     assert heuristic_mode(text, mode=mode, action=action) == expected
 
 
@@ -141,6 +145,7 @@ async def test_router_ollama_fast_path() -> None:
 
 def test_build_initial_messages_minimal_tokens_for_greetings() -> None:
     from datetime import UTC, datetime
+
     from clickachu.agent.orchestrator import _build_initial_messages
     from clickachu.api.protocol import ContextSnapshot, Memory, RunMessage, Settings
 
@@ -203,6 +208,14 @@ def test_build_initial_messages_minimal_tokens_for_greetings() -> None:
     # And capped at 3,500 chars (+ context overhead) rather than 15,000 chars
     assert len(full_code_text) < 5500
 
+    # Launching an unrelated app must not carry clipboard/document contents into inference.
+    agent_messages = _build_initial_messages(
+        RunMessage(run_id="run_3", text="open Example Player and play music"),
+        settings, snapshot, agent=True, is_ollama=True,
+    )
+    assert "def some_code():" not in str(agent_messages)
+    assert agent_messages[-1]["name"] == "current_task"
+
 
 # ---------------------------------------------------------------- Orchestrator (§12)
 
@@ -235,19 +248,10 @@ def test_agent_auto_tool_search_files_and_log(
         log_rows = client.get("/log", params={"run_id": "r_search"}).json()
 
     types = [e["type"] for e in events]
-    assert types == [
-        "run.started",
-        "orb.state",
-        "run.detail",
-        "token",
-        "step.started",
-        "orb.state",
-        "step.finished",
-        "orb.state",
-        "token",
-        "run.finished",
-        "orb.state",
-    ]
+    # Progress and raw output must surround real execution, not speculative prose.
+    assert types.index("step.started") < types.index("step.output") < types.index("step.finished")
+    assert types.index("step.finished") < types.index("token") < types.index("run.finished")
+    assert not any(e.get("delta", "").startswith("Searching for your resume") for e in events)
     assert events[0] == {"type": "run.started", "run_id": "r_search", "mode": "agent"}
     assert [e["state"] for e in events if e["type"] == "orb.state"] == [
         "thinking",
@@ -429,6 +433,7 @@ def test_agent_step_cap_stops_at_8_steps(make_app: AppFactory) -> None:
     provider = FakeProvider([ToolCall("c_loop", "recall", '{"query": "pnpm"}'), Done()])
     app = make_app(provider=provider)
     with TestClient(app, base_url=BASE_URL, headers=AUTH) as client:
+        client.put("/settings", json={"agent_max_steps": 8})
         with client.websocket_connect(WS_URL) as ws:
             ws.send_json({"type": "auth", "token": TOKEN})
             ws.send_json({"type": "run", "run_id": "r_cap", "text": "loop", "mode": "agent"})
@@ -440,16 +445,15 @@ def test_agent_step_cap_stops_at_8_steps(make_app: AppFactory) -> None:
     assert len(started) == 8
     assert len(finished) == 8
     assert len(provider.calls) == 8
-    assert "8-step limit" in events[-1]["text"]
+    assert "maximum 8 steps" in events[-1]["text"]
+    assert events[-1]["status"] == "error"
 
 
 def test_agent_cancel_during_approval(make_app: AppFactory) -> None:
     deploy = ConfirmDeployTool()
     reg = ToolRegistry()
     reg.register(deploy)
-    provider = FakeProvider(
-        [ToolCall("s_cancel", "deploy_service", '{"service": "api"}'), Done()]
-    )
+    provider = FakeProvider([ToolCall("s_cancel", "deploy_service", '{"service": "api"}'), Done()])
     app = make_app(provider=provider, registry=reg)
     with TestClient(app, base_url=BASE_URL, headers=AUTH) as client:
         with client.websocket_connect(WS_URL) as ws:
@@ -560,7 +564,7 @@ def test_agent_nudged_when_promising_action_without_tool_call(make_app: AppFacto
             events = receive_until(ws, "run.finished")
             ws.receive_json()  # idle
 
-    # Model was called 3 times: turn 1 (text promise), turn 2 (after nudge -> tool call), turn 3 (final text)
+    # Three calls: text promise, tool call after the nudge, then the final response.
     assert len(provider.calls) == 3
     assert any(e["type"] == "step.started" and e["tool"] == "recall" for e in events)
     assert events[-1]["ok"] is True

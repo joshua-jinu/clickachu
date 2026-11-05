@@ -56,6 +56,8 @@ def test_provider_preserves_separate_reasoning_deltas():
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider._is_openrouter = False
     provider._is_gemini = False
+    provider._is_ollama = False
+    provider._reasoning_effort = "auto"
     provider._client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(create=create),
@@ -110,7 +112,7 @@ def test_browser_snapshot_contains_article_text_and_control_refs():
 def test_lookup_routes_and_exposes_browser_tools(text):
     assert heuristic_mode(text) == "agent"
     names = {s["function"]["name"] for s in create_default_registry().scoped_schemas(text)}
-    assert {"browser_search", "browser_read"} <= names
+    assert {"web_search", "web_fetch"} <= names
     assert "write_file" not in names
 
 
@@ -128,7 +130,16 @@ def test_notepad_request_is_not_a_file_save():
 
 
 @pytest.mark.parametrize("decision", ["approve", "deny"])
-def test_notepad_workflow_generates_once_and_honors_approval(settings_store, decision):
+@pytest.mark.parametrize(
+    "user_request",
+    [
+        "open notepad and write a description of Porsche",
+        "Open nodepad and write me a cookie recipe",
+    ],
+)
+def test_notepad_workflow_generates_once_and_honors_approval(
+    settings_store, decision, user_request
+):
     settings_store.update(SettingsUpdate(provider="ollama", ollama_model="qwen3:4b-instruct"))
 
     class FakeNotepad(Tool):
@@ -190,7 +201,7 @@ def test_notepad_workflow_generates_once_and_honors_approval(settings_store, dec
         runner.handle_run(
             RunMessage(
                 run_id="notepad",
-                text="open notepad and write a description of Porsche",
+                text=user_request,
                 mode="agent",
             )
         )

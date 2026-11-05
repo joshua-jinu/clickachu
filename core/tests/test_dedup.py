@@ -178,13 +178,24 @@ async def test_extract_nothing(reply: dict[str, Any] | None) -> None:
 
 async def test_extract_defaults_bad_category() -> None:
     got = await extract_memory(
-        asker({"content": "x y", "category": "weird"}),
-        "remember x",
+        asker({"content": "Prefers pnpm", "category": "weird"}),
+        "remember I prefer pnpm",
         project=None,
         process=None,
         app=None,
     )
     assert got is not None and got.category == "fact"
+
+
+async def test_extract_rejects_unrelated_personal_details() -> None:
+    got = await extract_memory(
+        asker({"content": "User lives in Paris and works at ExampleCorp"}),
+        "Remember I prefer pnpm",
+        project=None,
+        process=None,
+        app=None,
+    )
+    assert got is None
 
 
 async def test_remember_from_message_saves_and_refuses_secrets(store: MemoryStore) -> None:

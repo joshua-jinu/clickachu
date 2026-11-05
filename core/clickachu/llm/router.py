@@ -31,13 +31,34 @@ def web_lookup_requested(text: str) -> bool:
 def notepad_write_requested(text: str) -> bool:
     """A bounded unsaved-editor task; explicit file/save requests use the general agent."""
     return (
-        bool(re.search(r"\bnotepad(?:\.exe)?\b", text, re.IGNORECASE))
+        bool(re.search(r"\b(?:notepad|nodepad|note\s+pad)(?:\.exe)?\b", text, re.IGNORECASE))
         and bool(re.search(r"\b(?:write|type|put|draft|compose|insert)\b", text, re.IGNORECASE))
         and not bool(re.search(r"\b(?:save|file|folder|path)\b", text, re.IGNORECASE))
         and not bool(
             re.match(r"\s*(?:how\s+(?:do|can|to)|explain|don't|do\s+not)", text, re.IGNORECASE)
         )
     )
+
+
+def lookup_query(text: str, history: list[dict[str, str]]) -> str:
+    stop = set(
+        (
+            "can could would you please check checkonline online internet web search look up "
+            "tell me about for and the it this that what is are who do on of"
+        ).split()
+    )
+
+    def terms(value: str) -> str:
+        return " ".join(w for w in re.findall(r"[\w.+#-]+", value) if w.lower() not in stop).strip(
+            " ."
+        )[:400]
+
+    query = terms(text)
+    if not query:
+        for message in reversed(history):
+            if message["role"] == "user" and (query := terms(message["content"])):
+                break
+    return query
 
 
 ROUTER_TIMEOUT_S = 3.0
@@ -121,6 +142,14 @@ def heuristic_mode(
     if _NO_ACTION.search(stripped):
         return "ask"
     if web_lookup_requested(stripped) or notepad_write_requested(stripped):
+        return "agent"
+    if re.match(
+        r"^\s*(?:(?:please|can\s+you|could\s+you|would\s+you|hey)[,\s]+)*"
+        r"(?:organize|organise|rename|convert|automate|download|install|uninstall|"
+        r"create|make|build|export|extract|compress|unzip|backup)\b",
+        stripped,
+        re.IGNORECASE,
+    ):
         return "agent"
     if _AGENT_HEURISTIC.search(stripped):
         return "agent"

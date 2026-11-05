@@ -69,3 +69,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
   created_at TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+  conversation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+  state_json TEXT NOT NULL, updated_at TEXT NOT NULL);

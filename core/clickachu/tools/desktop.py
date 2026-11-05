@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -78,9 +79,7 @@ def _is_admin_error(exc: BaseException) -> bool:
     return False
 
 
-def _find_window_by_title(
-    win32: RealWin32, title_query: str
-) -> tuple[int, str, str] | None:
+def _find_window_by_title(win32: RealWin32, title_query: str) -> tuple[int, str, str] | None:
     """Find a visible window whose title contains `title_query` (case-insensitive)."""
     windows = _enumerate_windows(win32)
     q = title_query.strip().lower()
@@ -255,9 +254,7 @@ class ListWindowsTool(Tool[ListWindowsArgs]):
 
         if args.query:
             q = args.query.strip().lower()
-            windows = [
-                w for w in windows if q in w[1].lower() or q in w[2].lower()
-            ]
+            windows = [w for w in windows if q in w[1].lower() or q in w[2].lower()]
 
         items = [{"hwnd": h, "title": t, "process": p} for h, t, p in windows]
         lines = [f"- {t} ({p}, hwnd={h})" for h, t, p in windows]
@@ -274,12 +271,8 @@ class ListWindowsTool(Tool[ListWindowsArgs]):
 
 
 class InspectWindowArgs(BaseModel):
-    title: str = Field(
-        min_length=1, description="Window title substring to inspect"
-    )
-    depth: int = Field(
-        default=3, ge=1, le=3, description="Inspection tree depth (1..3)"
-    )
+    title: str = Field(min_length=1, description="Window title substring to inspect")
+    depth: int = Field(default=3, ge=1, le=3, description="Inspection tree depth (1..3)")
     max_nodes: int = Field(
         default=150, ge=1, le=150, description="Maximum UI elements to inspect (1..150)"
     )
@@ -301,16 +294,12 @@ class InspectWindowTool(Tool[InspectWindowArgs]):
     def run(self, args: InspectWindowArgs, ctx: ToolContext) -> ToolResult:
         del ctx
         if sys.platform != "win32":
-            return ToolResult(
-                ok=False, summary="inspect_window requires Windows UI Automation"
-            )
+            return ToolResult(ok=False, summary="inspect_window requires Windows UI Automation")
 
         win32 = RealWin32()
         found = _find_window_by_title(win32, args.title)
         if not found:
-            return ToolResult(
-                ok=False, summary=f"Window matching {args.title!r} not found"
-            )
+            return ToolResult(ok=False, summary=f"Window matching {args.title!r} not found")
 
         hwnd, window_title, proc_name = found
         if proc_name == "[admin]":
@@ -346,9 +335,7 @@ class InspectWindowTool(Tool[InspectWindowArgs]):
                     indent = "  " * (current_depth - 1)
                     try:
                         ctrl_type_id = child.CurrentControlType
-                        ctrl_type = UIA_CONTROL_TYPES.get(
-                            ctrl_type_id, f"Control_{ctrl_type_id}"
-                        )
+                        ctrl_type = UIA_CONTROL_TYPES.get(ctrl_type_id, f"Control_{ctrl_type_id}")
                         name = (child.CurrentName or "").strip()
                         auto_id = (child.CurrentAutomationId or "").strip()
 
@@ -397,8 +384,7 @@ class OpenAppArgs(BaseModel):
     name: str = Field(
         min_length=1,
         description=(
-            "App name or command (e.g. 'notepad', 'code', 'chrome', "
-            "'edge', 'explorer', 'terminal')"
+            "App name or command (e.g. 'notepad', 'code', 'chrome', 'edge', 'explorer', 'terminal')"
         ),
     )
 
@@ -406,7 +392,15 @@ class OpenAppArgs(BaseModel):
 def _resolve_app_path(name: str) -> str | None:
     """Resolve an app executable per PLAN §13.3."""
     name_clean = name.strip()
+    if name_clean.casefold() in ("nodepad", "note pad", "nodepad.exe", "microsoft notepad"):
+        name_clean = "notepad"
     name_lower = name_clean.lower()
+    if re.fullmatch(r"[\w.-]+![\w.-]+", name_clean):
+        return "shell:AppsFolder\\" + name_clean
+    # Packaged Windows apps are launched through their registered URI or AppUserModelID,
+    # never by constructing a terminal command.
+    if name_lower in ("microsoft store", "windows store", "store"):
+        return "ms-windows-store:"
 
     # 1. Known map
     known: dict[str, str | None] = {
@@ -427,9 +421,7 @@ def _resolve_app_path(name: str) -> str | None:
             shutil.which("code.cmd")
             or shutil.which("code.exe")
             or shutil.which("code")
-            or os.path.expandvars(
-                r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe"
-            )
+            or os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe")
         ),
     }
 
@@ -465,6 +457,18 @@ def _resolve_app_path(name: str) -> str | None:
             except OSError:
                 pass
 
+    if sys.platform == "win32":
+        import win32com.client
+
+        shell = win32com.client.Dispatch("Shell.Application")
+        apps = shell.NameSpace("shell:AppsFolder")
+        if apps is not None:
+            matches = [item for item in apps.Items() if name_lower == str(item.Name).lower()]
+            if len(matches) == 1:
+                app_id = matches[0].ExtendedProperty("System.AppUserModel.ID")
+                if app_id:
+                    return "shell:AppsFolder\\" + str(app_id)
+
     # 4. Fallback: shutil.which
     which = shutil.which(name_clean)
     if which:
@@ -487,15 +491,14 @@ class OpenAppTool(Tool[OpenAppArgs]):
         return f"Open application {args.name!r}"
 
     def run(self, args: OpenAppArgs, ctx: ToolContext) -> ToolResult:
-        del ctx
         resolved = _resolve_app_path(args.name)
         if not resolved:
-            return ToolResult(
-                ok=False, summary=f"Could not resolve application {args.name!r}"
-            )
+            return ToolResult(ok=False, summary=f"Could not resolve application {args.name!r}")
 
         try:
-            if resolved.lower().endswith(".lnk"):
+            if resolved.lower().endswith(".lnk") or resolved.startswith(
+                ("shell:", "ms-windows-store:")
+            ):
                 os.startfile(resolved)
             else:
                 subprocess.Popen([resolved])
@@ -539,11 +542,27 @@ class OpenAppTool(Tool[OpenAppArgs]):
 
         if found_win:
             hwnd, title, proc = found_win
+            ui = None
+            if ctx is not None:
+                try:
+                    from pywinauto import Desktop
+
+                    from clickachu.tools.computer import observe
+
+                    ui = observe(Desktop(backend="uia").window(handle=hwnd).wrapper_object(), ctx)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("App opened but accessibility is not ready: %s", exc)
             return ToolResult(
                 ok=True,
-                data={"hwnd": hwnd, "title": title, "process": proc},
+                data={
+                    "hwnd": hwnd,
+                    "title": title,
+                    "process": proc,
+                    **(ui.data if ui and ui.ok else {}),
+                },
                 summary=f"Opened {args.name!r}: window {title!r} ({proc})",
-                untrusted_text=f"Opened {args.name}: {title} ({proc})",
+                untrusted_text=f"Opened {args.name}: {title} ({proc})"
+                + ("\n" + ui.untrusted_text if ui and ui.ok else ""),
             )
 
         return ToolResult(
@@ -559,7 +578,7 @@ class OpenAppTool(Tool[OpenAppArgs]):
             hwnd = result.data["hwnd"]
             win32 = RealWin32()
             return win32.is_window(hwnd)
-        return True
+        return None
 
 
 # ---------------------------------------------------------------- focus_window
@@ -589,9 +608,7 @@ class FocusWindowTool(Tool[FocusWindowArgs]):
         win32 = RealWin32()
         found = _find_window_by_title(win32, args.title)
         if not found:
-            return ToolResult(
-                ok=False, summary=f"No window found matching {args.title!r}"
-            )
+            return ToolResult(ok=False, summary=f"No window found matching {args.title!r}")
 
         hwnd, window_title, proc_name = found
         if proc_name == "[admin]":
@@ -633,13 +650,9 @@ class FocusWindowTool(Tool[FocusWindowArgs]):
 
 
 class TypeTextArgs(BaseModel):
-    window: str = Field(
-        min_length=1, description="Window title substring to target"
-    )
+    window: str = Field(min_length=1, description="Window title substring to target")
     text: str = Field(description="Text to type into the target window")
-    clear: bool = Field(
-        default=False, description="Clear existing text before typing"
-    )
+    clear: bool = Field(default=False, description="Clear existing text before typing")
 
 
 class TypeTextTool(Tool[TypeTextArgs]):
@@ -659,16 +672,12 @@ class TypeTextTool(Tool[TypeTextArgs]):
     def run(self, args: TypeTextArgs, ctx: ToolContext) -> ToolResult:
         del ctx
         if sys.platform != "win32":
-            return ToolResult(
-                ok=True, summary=f"Simulated typing into {args.window!r}"
-            )
+            return ToolResult(ok=True, summary=f"Simulated typing into {args.window!r}")
 
         win32 = RealWin32()
         found = _find_window_by_title(win32, args.window)
         if not found:
-            return ToolResult(
-                ok=False, summary=f"Window matching {args.window!r} not found"
-            )
+            return ToolResult(ok=False, summary=f"Window matching {args.window!r} not found")
 
         hwnd, window_title, proc_name = found
         if proc_name == "[admin]":
