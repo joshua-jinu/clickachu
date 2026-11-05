@@ -1,9 +1,8 @@
 /**
- * QuickBar (PLAN §9.2): the one voice + text HUD, opened by Alt+Q (center stage) or an orb click
- * (beside the orb).
- * - Mic is ON by default when summoned from the orb or Ctrl+Alt+V; the transcript streams into the
- *   input live while the user speaks.
- * - Typing stops the mic and calms the orb so the user can focus on writing.
+ * QuickBar (PLAN §9.2): the voice + text HUD positioned beside the persistent desktop orb.
+ * - The microphone remains OFF until the QuickBar mic control is clicked; transcripts stream into
+ *   the input while recording.
+ * - Typing does not change the explicit microphone toggle state.
  * - Conversational summaries are spoken aloud and captioned; technical details (paths, code, tool
  *   steps) are handed off to the side panel, after which the bar resets to a fresh message.
  * - Closing the bar never cancels a run: an in-flight run continues in the side panel.
@@ -22,20 +21,16 @@ import { ReconnectingBanner } from '@shared/components/ReconnectingBanner'
 import { ResultActions } from '@shared/components/ResultActions'
 import { RunTimer } from '@shared/components/RunTimer'
 import { RunDetails } from '@shared/components/RunDetails'
+import { isUserFacingActivity } from '@shared/activityVisibility'
 import type { PanelHandoff } from '@shared/bridge'
 import type { ContextSnapshot, ReplaceMode, RunAction, RunMode } from '@shared/protocol'
 import { recordChatRun, type RunState, useStore } from '@shared/store'
 import { speechEngine, splitVoiceAndTechnical } from '@shared/voiceSpeech'
 import { ws } from '@shared/ws'
-import { OrbScene, type OrbVisualState } from '../orb/orbScene'
 
 /** Vertical padding of the orb + composer layout (4px top and bottom). */
 const WINDOW_PADDING = 8
 const DEFAULT_MAX_HEIGHT = 520
-/** The grown orb beside the composer (same size the orb window used to expand to). */
-const HERO_ORB_SIZE = 130
-const HERO_ORB_RADIUS = 54
-
 interface Exchange {
   question: string
   runId: string
@@ -103,7 +98,6 @@ export function QuickBar() {
   const connection = useStore((s) => s.connection)
   const connectionDetail = useStore((s) => s.connectionDetail)
   const runs = useStore((s) => s.runs)
-  const orbState = useStore((s) => s.orbState)
 
   const [prompt, setPrompt] = useState('')
   const [exchanges, setExchanges] = useState<Exchange[]>([])
@@ -115,15 +109,13 @@ export function QuickBar() {
   const [applying, setApplying] = useState(false)
   const [doMode, setDoMode] = useState(false)
   const [isListening, setIsListening] = useState(false)
-  const [isTypingFocus, setIsTypingFocus] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [voiceMuted, setVoiceMuted] = useState(() => speechEngine.isMuted())
-  /** Which side of the composer the orb sits on (it opens where the desktop orb was). */
-  const [side, setSide] = useState<'left' | 'right'>('left')
   /** The run whose summary is spoken aloud; survives the reset that follows a panel handoff. */
   const [voiceRunId, setVoiceRunId] = useState<string | null>(null)
 
   const autoSendTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const micRequestRef = useRef(0)
   const ignoreNextTranscriptRef = useRef(false)
   const listeningRef = useRef(false)
   /** Text already in the input when the mic started; live transcripts are appended to it. */
@@ -135,11 +127,35 @@ export function QuickBar() {
   )
 
   const shellRef = useRef<HTMLDivElement>(null)
-  const promptRef = useRef<HTMLInputElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const sceneRef = useRef<OrbScene | null>(null)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const sendButtonRef = useRef<HTMLButtonElement>(null)
 
   const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
+  const focusPromptAfterShow = useCallback(() => {
+    requestAnimationFrame(() => {
+      const activeElement = document.activeElement
+      if (activeElement !== document.body && activeElement !== promptRef.current) return
+      window.focus()
+      requestAnimationFrame(() => {
+        const focusedElement = document.activeElement
+        if (focusedElement === document.body || focusedElement === promptRef.current) {
+          promptRef.current?.focus({ preventScroll: true })
+        }
+      })
+    })
+  }, [])
+  const restorePromptFocus = useCallback(() => {
+    requestAnimationFrame(() => {
+      const activeElement = document.activeElement
+      if (
+        activeElement === document.body ||
+        activeElement === promptRef.current ||
+        activeElement === sendButtonRef.current
+      ) {
+        focusPrompt()
+      }
+    })
+  }, [focusPrompt])
 
   const last = exchanges.at(-1)
   const lastRun = last ? runs[last.runId] : undefined
@@ -155,123 +171,19 @@ export function QuickBar() {
     (voiceRun?.steps.length ?? 0) > 0 || voiceRun?.mode === 'agent',
   )
 
-  // Determine the hero orb's visual state
-  const heroOrbState: OrbVisualState =
-    lastRun?.status === 'error' || orbState === 'error'
-      ? 'error'
-      : isSpeaking
-        ? 'speaking'
-        : isListening
-          ? 'listening'
-          : running
-            ? lastRun?.steps.some((s) => s.status === 'awaiting_approval')
-              ? 'attention'
-              : lastRun?.steps.length
-                ? 'acting'
-                : 'thinking'
-            : prompt.trim().length > 0 || isTypingFocus
-              ? 'typing'
-              : 'idle'
-
-  // Mount the hero orb scene
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const scene = new OrbScene(canvas, HERO_ORB_SIZE, HERO_ORB_RADIUS)
-    sceneRef.current = scene
-    scene.start()
-
-    const handleContextLost = (e: Event) => e.preventDefault()
-    const handleContextRestored = () => {
-      sceneRef.current?.dispose()
-      const next = new OrbScene(canvas, HERO_ORB_SIZE, HERO_ORB_RADIUS)
-      sceneRef.current = next
-      next.start()
-    }
-    canvas.addEventListener('webglcontextlost', handleContextLost, false)
-    canvas.addEventListener('webglcontextrestored', handleContextRestored, false)
-    return () => {
-      canvas.removeEventListener('webglcontextlost', handleContextLost)
-      canvas.removeEventListener('webglcontextrestored', handleContextRestored)
-      sceneRef.current?.dispose()
-      sceneRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    sceneRef.current?.setState(heroOrbState)
-  }, [heroOrbState])
-
   useLayoutEffect(() => {
     listeningRef.current = isListening
   }, [isListening])
 
-  // Microphone RMS levels (from sidecar) and TTS speech cadence levels drive the orb.
+  // Keep the QuickBar's speaking status in sync with generated speech.
   useEffect(() => {
-    const offMic = ws.on('voice.level', (msg) => {
-      if (listeningRef.current) sceneRef.current?.setLevel(msg.rms)
-    })
-    const offTtsLevel = speechEngine.onLevel((rms) => {
-      sceneRef.current?.setLevel(rms)
-    })
     const offTtsState = speechEngine.onSpeakingChange((speaking) => {
       setIsSpeaking(speaking)
     })
     return () => {
-      offMic()
-      offTtsLevel()
       offTtsState()
     }
   }, [])
-
-  // Local Web Audio analyser for smooth 60fps vibration while listening
-  useEffect(() => {
-    if (!isListening) return
-    let cancelled = false
-    let audioCtx: AudioContext | null = null
-    let mediaStream: MediaStream | null = null
-    let raf = 0
-
-    navigator.mediaDevices
-      ?.getUserMedia({ audio: true })
-      .then((stream) => {
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop())
-          return
-        }
-        mediaStream = stream
-        audioCtx = new AudioContext()
-        const source = audioCtx.createMediaStreamSource(stream)
-        const analyser = audioCtx.createAnalyser()
-        analyser.fftSize = 256
-        source.connect(analyser)
-        const data = new Uint8Array(analyser.frequencyBinCount)
-
-        const tick = () => {
-          if (cancelled) return
-          analyser.getByteTimeDomainData(data)
-          let sum = 0
-          for (let i = 0; i < data.length; i++) {
-            const v = (data[i] - 128) / 128
-            sum += v * v
-          }
-          const rms = Math.sqrt(sum / data.length)
-          sceneRef.current?.setLevel(Math.min(1, rms * 4.8))
-          raf = requestAnimationFrame(tick)
-        }
-        raf = requestAnimationFrame(tick)
-      })
-      .catch(() => {
-        // Sidecar voice.level WS events still drive the orb if getUserMedia is unavailable
-      })
-
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-      mediaStream?.getTracks().forEach((t) => t.stop())
-      void audioCtx?.close().catch(() => {})
-    }
-  }, [isListening])
 
   // Keep main informed so it doesn't hide the HUD on blur while listening, running, or speaking.
   const keepOpen = running || isListening || isSpeaking
@@ -307,6 +219,7 @@ export function QuickBar() {
 
   // Start / stop microphone helpers
   const startMic = useCallback(async () => {
+    const requestId = ++micRequestRef.current
     speechEngine.stop()
     ignoreNextTranscriptRef.current = false
     micPrefixRef.current = promptRef.current?.value.trim() ?? ''
@@ -315,6 +228,10 @@ export function QuickBar() {
     setNotice('')
     try {
       const res = await api.startVoice()
+      if (requestId !== micRequestRef.current) {
+        if (res.ok) await api.stopVoice()
+        return
+      }
       if (!res.ok) {
         listeningRef.current = false
         setIsListening(false)
@@ -328,6 +245,7 @@ export function QuickBar() {
 
   const stopMic = useCallback(
     async (discardTranscript = false) => {
+      micRequestRef.current += 1
       if (discardTranscript) ignoreNextTranscriptRef.current = true
       listeningRef.current = false
       setIsListening(false)
@@ -342,9 +260,9 @@ export function QuickBar() {
   )
 
   const toggleMic = useCallback(() => {
-    if (isListening) void stopMic(false)
+    if (listeningRef.current) void stopMic(false)
     else void startMic()
-  }, [isListening, startMic, stopMic])
+  }, [startMic, stopMic])
 
   /** Clear the on-screen conversation so the next message starts fresh. */
   const resetConversation = useCallback(() => {
@@ -406,13 +324,16 @@ export function QuickBar() {
     voiceSplit.hasTechnicalDetails,
   ])
 
-  // Each time the HUD is shown: reset if idle, start mic if requested, and focus the input.
+  // Opening the HUD never starts recording; only its microphone button does that.
   useEffect(
     () =>
       window.clickachu.onQuickBarShown(
-        ({ maxHeight: mh, context: captured, initialAction, isListening: listening, side: s }) => {
+        ({ maxHeight: mh, context: captured, initialAction, focusInput }) => {
           setMaxHeight(mh)
-          setSide(s ?? 'left')
+          if (focusInput) {
+            if (listeningRef.current) void stopMic(true)
+            else setIsListening(false)
+          }
           // A fresh Alt+Q selection is the source for the next message, even while an
           // earlier run is finishing. That run already owns its original context ID.
           if (captured?.selection || !runningRef.current) {
@@ -422,7 +343,6 @@ export function QuickBar() {
           }
           if (!runningRef.current) {
             setExchanges([])
-            setPrompt('')
             setNotice('')
             setDoMode(false)
             if (initialAction) {
@@ -432,27 +352,27 @@ export function QuickBar() {
                 runActionRef.current(initialAction, captured?.id ?? null)
               })
             } else {
-              // Default mic ON when opened from the orb or voice hotkey
-              if (listening ?? true) {
-                void startMic()
-              } else {
-                listeningRef.current = false
-                setIsListening(false)
-              }
-              requestAnimationFrame(focusPrompt)
+              if (focusInput) focusPromptAfterShow()
             }
           } else {
-            if (listening) void startMic()
-            requestAnimationFrame(focusPrompt)
+            if (focusInput) focusPromptAfterShow()
           }
         },
       ),
-    [startMic, focusPrompt],
+    [stopMic, focusPromptAfterShow],
   )
 
-  useEffect(() => {
-    promptRef.current?.focus()
-  }, [])
+  useEffect(
+    () =>
+      window.clickachu.onQuickBarHidden(() => {
+        if (listeningRef.current) void stopMic(true)
+        else {
+          listeningRef.current = false
+          setIsListening(false)
+        }
+      }),
+    [stopMic],
+  )
 
   const contextId = context && !selectionDropped ? context.id : undefined
   const hasSelection = Boolean(context?.selection) && !selectionDropped
@@ -520,7 +440,6 @@ export function QuickBar() {
   )
 
   function runAction(action: RunAction, explicitContextId?: string | null) {
-    if (isListening) void stopMic(true)
     if (action === 'do') {
       const typed = prompt.trim()
       if (typed && !running) {
@@ -581,13 +500,12 @@ export function QuickBar() {
     }
   }, [handleTranscript, withMicPrefix])
 
-  // Typing stops the mic (keeping what's in the box) and calms the orb into 'typing'.
+  // Typing edits the prompt without changing the microphone's explicit toggle state.
   function onPromptChange(value: string) {
     if (autoSendTimer.current) {
       clearTimeout(autoSendTimer.current)
       autoSendTimer.current = null
     }
-    if (isListening) void stopMic(true)
     if (isSpeaking && value.length > 0) speechEngine.stop()
     setPrompt(value)
   }
@@ -656,15 +574,17 @@ export function QuickBar() {
       clearTimeout(autoSendTimer.current)
       autoSendTimer.current = null
     }
-    if (isListening) void stopMic(true)
     if (doMode) {
-      if (start(q, q, false, 'do', 'agent')) {
+      const started = start(q, q, false, 'do', 'agent')
+      if (started) {
         setPrompt('')
         setDoMode(false)
       }
+      restorePromptFocus()
       return
     }
     if (start(q, q, exchanges.length > 0)) setPrompt('')
+    restorePromptFocus()
   }
 
   /** Stop button: the only thing that cancels a run. */
@@ -737,7 +657,9 @@ export function QuickBar() {
           ? 'Waiting for your approval in Side Panel…'
           : lastRun?.steps.some((s) => s.status === 'running')
             ? `Running ${lastRun.steps.find((s) => s.status === 'running')?.tool ?? 'task'}…`
-            : lastRun?.activity || 'Generating response…'
+              : isUserFacingActivity(lastRun?.activity)
+                ? lastRun.activity
+                : 'Generating response…'
         : prompt.trim().length > 0
           ? 'Press Enter to send'
           : 'Ready · speak or type below'
@@ -755,27 +677,8 @@ export function QuickBar() {
   return (
     <div
       ref={shellRef}
-      className={`ck-orb-voice-layer ck-orb-expanded-layout ${side === 'right' ? 'is-anchored-right' : ''}`}
+      className="ck-quickbar-root ck-orb-voice-layer ck-orb-expanded-layout"
     >
-      {/* The orb, grown beside the composer; click to toggle the mic */}
-      <button
-        type="button"
-        onClick={toggleMic}
-        title={isListening ? 'Listening — click to mute mic' : 'Click orb to speak'}
-        aria-label={isListening ? 'Stop listening' : 'Start listening'}
-        className={`ck-orb-expanded-visual ${isListening ? 'is-listening' : ''}`}
-      >
-        <span className="ck-orb-grown">
-          <canvas
-            ref={canvasRef}
-            width={HERO_ORB_SIZE}
-            height={HERO_ORB_SIZE}
-            className="pointer-events-none"
-            style={{ width: HERO_ORB_SIZE, height: HERO_ORB_SIZE }}
-          />
-        </span>
-      </button>
-
       <div className="ck-orb-expanded-composer">
         <div
           className="ck-glass ck-orb-composer-card"
@@ -973,15 +876,13 @@ export function QuickBar() {
             )}
 
             <div className="flex min-w-0 flex-1 items-center py-0.5">
-              <input
+              <textarea
                 ref={promptRef}
-                type="text"
+                rows={1}
                 value={prompt}
-                onFocus={() => setIsTypingFocus(true)}
-                onBlur={() => setIsTypingFocus(false)}
                 onChange={(e) => onPromptChange(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.ctrlKey && !e.nativeEvent.isComposing) {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault()
                     sendPrompt()
                   }
@@ -998,7 +899,8 @@ export function QuickBar() {
                 aria-label="Message Clickachu"
                 autoComplete="off"
                 spellCheck={false}
-                className="ck-inline-chat-text h-8 bg-transparent text-sm leading-5 text-ck-text outline-none placeholder:text-ck-muted/75"
+                className="ck-inline-chat-text h-8 resize-none bg-transparent text-sm leading-5 text-ck-text outline-none placeholder:text-ck-muted/75"
+                style={{ whiteSpace: 'pre-wrap', overflowY: 'auto', textOverflow: 'clip' }}
               />
             </div>
 
@@ -1013,6 +915,7 @@ export function QuickBar() {
               </button>
             ) : (
               <button
+                ref={sendButtonRef}
                 type="button"
                 onClick={sendPrompt}
                 disabled={!prompt.trim()}

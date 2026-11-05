@@ -4,14 +4,12 @@ import { globalShortcut } from 'electron'
 export interface HotkeyActions {
   openQuickBar: () => void
   togglePanel: () => void
-  toggleVoice: () => void
 }
 
 export function registerHotkeys(actions: HotkeyActions): void {
   const bindings: [string, () => void][] = [
     ['Alt+Q', actions.openQuickBar],
     ['Control+Alt+P', actions.togglePanel],
-    ['Control+Alt+V', actions.toggleVoice],
   ]
   for (const [accel, fn] of bindings) {
     // register() returns false (no throw) when another app already owns the combination.

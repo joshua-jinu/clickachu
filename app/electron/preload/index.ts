@@ -11,12 +11,15 @@ import {
   IPC_ORB_DRAG,
   IPC_ORB_EXPANDED,
   IPC_PANEL_HANDOFF,
+  IPC_PANEL_READY,
   IPC_PANEL_HIDE,
   IPC_PANEL_SHOWN,
   IPC_PICK_FOLDER,
   IPC_QUICKBAR_HEIGHT,
+  IPC_QUICKBAR_HIDDEN,
   IPC_QUICKBAR_HIDE,
   IPC_QUICKBAR_RUN_ACTIVE,
+  IPC_QUICKBAR_READY,
   IPC_QUICKBAR_SHOWN,
   IPC_SHOW_NOTIFICATION,
   IPC_TOGGLE_PANEL,
@@ -43,7 +46,13 @@ const api: ClickachuBridge = {
     // Never hand the IpcRendererEvent to the page (it exposes `sender`).
     const listener = (_e: IpcRendererEvent, info: QuickBarShown): void => handler(info)
     ipcRenderer.on(IPC_QUICKBAR_SHOWN, listener)
+    ipcRenderer.send(IPC_QUICKBAR_READY)
     return () => ipcRenderer.removeListener(IPC_QUICKBAR_SHOWN, listener)
+  },
+  onQuickBarHidden: (handler) => {
+    const listener = (): void => handler()
+    ipcRenderer.on(IPC_QUICKBAR_HIDDEN, listener)
+    return () => ipcRenderer.removeListener(IPC_QUICKBAR_HIDDEN, listener)
   },
   onVoiceTranscript: (handler) => {
     const listener = (_e: IpcRendererEvent, text: string): void => handler(text)
@@ -59,8 +68,10 @@ const api: ClickachuBridge = {
   pickFolder: () => ipcRenderer.invoke(IPC_PICK_FOLDER) as Promise<string | null>,
   hidePanel: () => ipcRenderer.send(IPC_PANEL_HIDE),
   onPanelShown: (handler) => {
-    const listener = (): void => handler()
+    const listener = (_e: IpcRendererEvent, focusComposer: boolean): void =>
+      handler(focusComposer === true)
     ipcRenderer.on(IPC_PANEL_SHOWN, listener)
+    ipcRenderer.send(IPC_PANEL_READY)
     return () => ipcRenderer.removeListener(IPC_PANEL_SHOWN, listener)
   },
   onOpenSettings: (handler) => {

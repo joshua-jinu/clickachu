@@ -9,13 +9,14 @@ import {
   IPC_ORB_DRAG,
   IPC_ORB_EXPANDED,
   IPC_PANEL_HIDE,
+  IPC_PANEL_READY,
   IPC_PICK_FOLDER,
   IPC_QUICKBAR_HEIGHT,
   IPC_QUICKBAR_HIDE,
+  IPC_QUICKBAR_READY,
   IPC_QUICKBAR_RUN_ACTIVE,
   IPC_SHOW_NOTIFICATION,
   IPC_TOGGLE_PANEL,
-  IPC_VOICE_TRANSCRIPT,
   type OrbDragPhase,
   type PanelHandoff,
   type QuickBarAnchor,
@@ -42,6 +43,7 @@ import {
   panelWindow,
   pickFolder,
   showPanel,
+  setPanelRendererReady,
   togglePanel,
 } from './windows/panel'
 import {
@@ -49,6 +51,7 @@ import {
   hideQuickBar,
   openQuickBar,
   quickBarWindow,
+  setQuickBarRendererReady,
   setQuickBarContentHeight,
   setQuickBarRunActive,
 } from './windows/quickbar'
@@ -69,7 +72,6 @@ const sidecar = new Sidecar(
   devUrl ? new URL(devUrl).origin : undefined,
 )
 
-let voiceRecording = false
 let currentSettings: Settings | null = null
 
 async function sidecarRequest<T>(method: string, path: string, body?: unknown): Promise<T | null> {
@@ -135,28 +137,9 @@ const menuActions: MenuActions = {
   },
 }
 
-const toggleVoice = async () => {
-  if (!voiceRecording) {
-    voiceRecording = true
-    const res = await sidecarRequest<{ ok: boolean }>('POST', '/voice/start')
-    if (res?.ok) {
-      openQuickBar(null, undefined, true)
-    } else {
-      voiceRecording = false
-    }
-  } else {
-    voiceRecording = false
-    const res = await sidecarRequest<{ text: string }>('POST', '/voice/stop')
-    if (res?.text !== undefined) {
-      quickBarWindow()?.webContents.send(IPC_VOICE_TRANSCRIPT, res.text)
-    }
-  }
-}
-
 const hotkeyActions = {
   openQuickBar: createOpenWithContext(sidecar),
   togglePanel,
-  toggleVoice,
 }
 
 /** Only accept a window-specific IPC call from that window. */
@@ -170,6 +153,8 @@ function from(
 }
 
 ipcMain.handle(IPC_BACKEND, () => sidecar.backend())
+ipcMain.on(IPC_QUICKBAR_READY, from(quickBarWindow, () => setQuickBarRendererReady()))
+ipcMain.on(IPC_PANEL_READY, from(panelWindow, () => setPanelRendererReady()))
 ipcMain.on(
   IPC_OPEN_QUICKBAR,
   (
@@ -187,13 +172,7 @@ ipcMain.on(
         ctx = await captureContext(sidecar)
       }
       const anchor: QuickBarAnchor = payload?.anchor === 'orb' ? 'orb' : 'center'
-      if (payload?.isListening && currentSettings?.voice_enabled !== false) {
-        const res = await sidecarRequest<{ ok: boolean }>('POST', '/voice/start')
-        voiceRecording = Boolean(res?.ok)
-        openQuickBar(ctx, payload?.initialAction, voiceRecording || payload.isListening, anchor)
-        return
-      }
-      openQuickBar(ctx, payload?.initialAction, payload?.isListening, anchor)
+      openQuickBar(ctx, payload?.initialAction, false, anchor)
     })()
   },
 )

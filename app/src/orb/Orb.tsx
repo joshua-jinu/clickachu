@@ -226,8 +226,8 @@ export function Orb({ isEnabled = true }: { isEnabled?: boolean }) {
     setSuggestion(null)
     setBubbleVisible(false)
     window.clickachu.setOrbExpanded(false)
-    // Same QuickBar as Alt+Q, opened beside the orb with the mic on.
-    window.clickachu.openQuickBar(null, undefined, true, 'orb')
+    // Same QuickBar as Alt+Q, opened beside the orb with the mic off.
+    window.clickachu.openQuickBar(null, undefined, false, 'orb')
   }, [])
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {

@@ -16,6 +16,7 @@ const HIT_POLL_MS = 40
 let win: BrowserWindow | null = null
 /** Cursor offset from the window's top-left while dragging. */
 let dragOffset: Point | null = null
+let expandedOnRight = false
 let ignoringMouse = true
 let hitPollTimer: ReturnType<typeof setInterval> | null = null
 let workspaceBounds: Rectangle | null = null
@@ -53,6 +54,7 @@ function applyIgnoreMouse(ignore: boolean): void {
 }
 
 export function createOrbWindow(): BrowserWindow {
+  expandedOnRight = false
   const pos = validPosition(prefs.get('orbPosition'))
   win = new BrowserWindow({
     x: pos.x,
@@ -87,6 +89,7 @@ export function createOrbWindow(): BrowserWindow {
   }, HIT_POLL_MS)
 
   win.on('closed', () => {
+    expandedOnRight = false
     if (hitPollTimer) {
       clearInterval(hitPollTimer)
       hitPollTimer = null
@@ -121,20 +124,31 @@ export function setOrbClickThrough(enabled: boolean): void {
 
 const EXPANDED_WIDTH = 340
 
+/** Pixel centre of the particle sphere, including when its hover bubble expands the window. */
+export function orbCenterPoint(): Point | null {
+  if (!win || win.isDestroyed()) return null
+  const bounds = win.getBounds()
+  return {
+    x: bounds.x + (bounds.width > SIZE && expandedOnRight ? bounds.width - SIZE / 2 : SIZE / 2),
+    y: bounds.y + bounds.height / 2,
+  }
+}
+
 export function setOrbExpanded(expanded: boolean): void {
   if (!win) return
   const b = win.getBounds()
   const display = screen.getDisplayMatching(b)
-  const onRight = b.x + SIZE / 2 > display.workArea.x + display.workArea.width / 2
   if (expanded) {
     if (b.width === SIZE) {
-      const newX = onRight ? b.x - (EXPANDED_WIDTH - SIZE) : b.x
+      expandedOnRight = b.x + SIZE / 2 > display.workArea.x + display.workArea.width / 2
+      const newX = expandedOnRight ? b.x - (EXPANDED_WIDTH - SIZE) : b.x
       win.setBounds({ x: newX, y: b.y, width: EXPANDED_WIDTH, height: SIZE })
     }
   } else {
     if (b.width === EXPANDED_WIDTH) {
-      const newX = onRight ? b.x + (EXPANDED_WIDTH - SIZE) : b.x
+      const newX = expandedOnRight ? b.x + (EXPANDED_WIDTH - SIZE) : b.x
       win.setBounds({ x: newX, y: b.y, width: SIZE, height: SIZE })
+      expandedOnRight = false
     }
   }
 }

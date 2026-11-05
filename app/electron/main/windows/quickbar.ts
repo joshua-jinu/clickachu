@@ -1,31 +1,33 @@
 /**
  * Quick bar window (PLAN §9.2): the single voice + text HUD for both Alt+Q and orb clicks.
- * The layout is the orb grown beside a compact composer card. Opened from the orb, it takes the
- * orb's place on screen (the desktop orb hides meanwhile, so there is only ever one orb); opened
- * with Alt+Q it sits center stage. It sizes itself to the renderer's reported content height and
- * hides on blur unless a run or voice session is active.
+ * The original desktop orb stays visible; this window contains only its adjacent composer. It
+ * sizes itself to the renderer's reported content height and hides on blur unless a run or voice
+ * session is active.
  */
 import { BrowserWindow, type Rectangle, screen } from 'electron'
 import {
   IPC_QUICKBAR_SHOWN,
+  IPC_QUICKBAR_HIDDEN,
   type QuickBarAnchor,
   type QuickBarShown,
 } from '../../../src/shared/bridge'
 import type { ContextSnapshot, RunAction } from '../../../src/shared/protocol'
 import type { Point } from '../store'
 import { animateWindowPosition, loadPage, secureWebPreferences } from './common'
-import { orbWindow, orbWorkspaceOffset } from './orb'
+import { orbCenterPoint, orbWindow, orbWorkspaceOffset } from './orb'
 import { panelWindow, registerQuickBarWorkspacePositioning } from './panel'
 
-const WIDTH = 540
+const WIDTH = 360
 const MIN_HEIGHT = 250
 const MAX_HEIGHT_FRACTION = 0.68
 const PANEL_WIDTH_RESERVE = 480
 const EDGE = 12
-/** Distance from the bar's edge to the centre of its orb column (4px padding + 194px / 2). */
-const ORB_COLUMN_CENTER = 101
+const ORB_GAP = 12
+const ORB_SIZE = 120
 
 let win: BrowserWindow | null = null
+let rendererReady = false
+let pendingShownInfo: QuickBarShown | null = null
 let contentHeight = MIN_HEIGHT
 let runActive = false
 /** Work area of the display the bar was last opened on. */
@@ -33,7 +35,6 @@ let workArea: Rectangle | null = null
 /** Centre of the desktop orb when the bar was opened from it; null for center-stage opens. */
 let orbCenter: Point | null = null
 let side: 'left' | 'right' = 'left'
-let orbHidden = false
 let quickBarWorkspaceOrigin: Rectangle | null = null
 let quickBarWorkspaceOrbOffset: Point = { x: 0, y: 0 }
 let quickBarWorkspaceOrbCenter: Point | null = null
@@ -62,22 +63,37 @@ export function createQuickBarWindow(): BrowserWindow {
     title: 'Clickachu',
     webPreferences: secureWebPreferences(),
   })
+  rendererReady = false
+  pendingShownInfo = null
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false
+    pendingShownInfo = null
+  })
   win.setAlwaysOnTop(true, 'pop-up-menu')
 
   win.on('blur', () => {
     if (!runActive && !panelWindow()?.isVisible()) hideQuickBar()
   })
-  win.on('hide', restoreOrb)
   win.on('closed', () => {
     win = null
+    rendererReady = false
+    pendingShownInfo = null
     quickBarWorkspaceOrigin = null
     quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
     quickBarWorkspaceOrbCenter = null
-    restoreOrb()
   })
 
   loadPage(win, 'quickbar')
   return win
+}
+
+/** Called after the QuickBar renderer subscribes to visibility events. */
+export function setQuickBarRendererReady(): void {
+  rendererReady = true
+  if (win?.isVisible() && pendingShownInfo) {
+    win.webContents.send(IPC_QUICKBAR_SHOWN, pendingShownInfo)
+    pendingShownInfo = null
+  }
 }
 
 function maxHeight(area: Rectangle): number {
@@ -111,13 +127,19 @@ function boundsCentered(area: Rectangle, height: number): Rectangle {
   return { x: Math.round(x), y: Math.round(y), width: WIDTH, height }
 }
 
-/** The bar's orb column lands where the desktop orb was; the composer extends toward the screen. */
+/** Keep the composer beside the desktop orb, leaving the orb at its original screen position. */
 function boundsAtOrb(area: Rectangle, height: number, center: Point): Rectangle {
-  const x =
-    side === 'right' ? center.x + ORB_COLUMN_CENTER - WIDTH : center.x - ORB_COLUMN_CENTER
+  const orbLeft = center.x - ORB_SIZE / 2
+  const orbRight = center.x + ORB_SIZE / 2
+  const minX = area.x + EDGE
+  const maxX = usableRight(area) - WIDTH - EDGE
+  const preferredX = side === 'right' ? orbLeft - ORB_GAP - WIDTH : orbRight + ORB_GAP
+  const alternateX = side === 'right' ? orbRight + ORB_GAP : orbLeft - ORB_GAP - WIDTH
+  const fits = (x: number) => x >= minX && x <= maxX
+  const x = fits(preferredX) ? preferredX : fits(alternateX) ? alternateX : preferredX
   const y = center.y - Math.round(height / 2)
   return {
-    x: Math.round(clamp(x, area.x + EDGE, usableRight(area) - WIDTH - EDGE)),
+    x: Math.round(clamp(x, minX, maxX)),
     y: Math.round(clamp(y, area.y + EDGE, area.y + area.height - height - EDGE)),
     width: WIDTH,
     height,
@@ -126,13 +148,6 @@ function boundsAtOrb(area: Rectangle, height: number, center: Point): Rectangle 
 
 function placement(area: Rectangle, height: number): Rectangle {
   return orbCenter ? boundsAtOrb(area, height, orbCenter) : boundsCentered(area, height)
-}
-
-function restoreOrb(): void {
-  if (!orbHidden) return
-  orbHidden = false
-  const orb = orbWindow()
-  if (orb && !orb.isDestroyed()) orb.showInactive()
 }
 
 export function nudgeQuickBarForPanel(): void {
@@ -218,18 +233,21 @@ function restoreQuickBarAfterWorkspace(): void {
 export function openQuickBar(
   context: ContextSnapshot | null = null,
   initialAction?: RunAction,
-  isListening?: boolean,
+  _isListening?: boolean,
   anchor: QuickBarAnchor = 'center',
 ): void {
   if (!win) return
+  const focusInput = !win.isVisible() || win.isMinimized()
+  if (win.isMinimized()) win.restore()
   if (!win.isVisible()) {
     const orb = anchor === 'orb' ? orbWindow() : null
     if (orb?.isVisible()) {
       const o = orb.getBounds()
       const display = screen.getDisplayMatching(o)
       workArea = display.workArea
-      orbCenter = { x: o.x + o.width / 2, y: o.y + o.height / 2 }
-      side = orbCenter.x >= workArea.x + workArea.width / 2 ? 'right' : 'left'
+      orbCenter = orbCenterPoint() ?? { x: o.x + ORB_SIZE / 2, y: o.y + o.height / 2 }
+      const onRight = orbCenter.x >= workArea.x + workArea.width / 2
+      side = onRight ? 'right' : 'left'
     } else {
       workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
       orbCenter = null
@@ -237,33 +255,38 @@ export function openQuickBar(
     }
     win.setBounds(placement(workArea, clampHeight(contentHeight, workArea)))
     win.show()
-    // One orb on screen: the bar's own orb stands in for the desktop orb while open.
-    if (orbCenter && orb?.isVisible()) {
-      orb.hide()
-      orbHidden = true
-    }
     captureQuickBarOpenedDuringWorkspace()
   } else {
     nudgeQuickBarForPanel()
   }
   win.focus()
-  win.webContents.send(IPC_QUICKBAR_SHOWN, {
+  win.webContents.focus()
+  const shownInfo: QuickBarShown = {
     maxHeight: maxHeight(workArea ?? screen.getPrimaryDisplay().workArea),
     context,
     initialAction,
-    isListening,
+    isListening: false,
+    focusInput,
     side,
-  } satisfies QuickBarShown)
+  }
+  if (rendererReady) {
+    win.webContents.send(IPC_QUICKBAR_SHOWN, shownInfo)
+  } else {
+    pendingShownInfo = shownInfo
+  }
 }
 
 export function hideQuickBar(): void {
-  if (win?.isVisible()) win.hide()
+  pendingShownInfo = null
+  if (win?.isVisible()) {
+    win.webContents.send(IPC_QUICKBAR_HIDDEN)
+    win.hide()
+  }
   if (panelWindow()?.isVisible()) {
     quickBarWorkspaceOrigin = null
     quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
     quickBarWorkspaceOrbCenter = null
   }
-  restoreOrb()
 }
 
 export function setQuickBarRunActive(active: boolean): void {

@@ -112,7 +112,7 @@ function ChatTurn({ runId }: { runId: string }) {
   )
 }
 
-export function ChatTab() {
+export function ChatTab({ focusRequest = 0 }: { focusRequest?: number }) {
   const connection = useStore((s) => s.connection)
   const history = useStore((s) => s.chatHistory)
   const runs = useStore((s) => s.runs)
@@ -142,6 +142,12 @@ export function ChatTab() {
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`
   }, [prompt])
+
+  useEffect(() => {
+    if (focusRequest === 0) return
+    const frame = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [focusRequest])
 
   function send(e?: FormEvent) {
     e?.preventDefault()

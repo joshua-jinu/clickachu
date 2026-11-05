@@ -21,6 +21,8 @@ export interface QuickBarShown {
   context: ContextSnapshot | null
   initialAction?: RunAction
   isListening?: boolean
+  /** True only when opening from hidden; prevents refocusing after the user moves to another control. */
+  focusInput: boolean
   /** Side the orb sits on, so it appears where the desktop orb was. */
   side?: 'left' | 'right'
 }
@@ -68,6 +70,7 @@ export interface ClickachuBridge {
   setQuickBarRunActive(active: boolean): void
   /** Returns an unsubscribe. */
   onQuickBarShown(handler: (info: QuickBarShown) => void): () => void
+  onQuickBarHidden(handler: () => void): () => void
   onVoiceTranscript(handler: (text: string) => void): () => void
 
   // ---- orb (§9.1)
@@ -82,7 +85,7 @@ export interface ClickachuBridge {
   pickFolder(): Promise<string | null>
   hidePanel(): void
   /** Fires each time the panel is shown, so the renderer can replay its slide-in. */
-  onPanelShown(handler: () => void): () => void
+  onPanelShown(handler: (focusComposer: boolean) => void): () => void
   /** Fires when Settings is requested from tray/menu. */
   onOpenSettings(handler: () => void): () => void
   /** Fires when the quick bar hands a run or answer off to the panel's Chat tab. */
@@ -97,6 +100,8 @@ export const IPC_QUICKBAR_HEIGHT = 'clickachu:quickbar:height'
 export const IPC_QUICKBAR_HIDE = 'clickachu:quickbar:hide'
 export const IPC_QUICKBAR_RUN_ACTIVE = 'clickachu:quickbar:run-active'
 export const IPC_QUICKBAR_SHOWN = 'clickachu:quickbar:shown'
+export const IPC_QUICKBAR_HIDDEN = 'clickachu:quickbar:hidden'
+export const IPC_QUICKBAR_READY = 'clickachu:quickbar:ready'
 export const IPC_ORB_CLICK_THROUGH = 'clickachu:orb:click-through'
 export const IPC_ORB_EXPANDED = 'clickachu:orb:expanded'
 export const IPC_ORB_DRAG = 'clickachu:orb:drag'
@@ -104,6 +109,7 @@ export const IPC_CONTEXT_MENU = 'clickachu:context-menu'
 export const IPC_PICK_FOLDER = 'clickachu:pick-folder'
 export const IPC_PANEL_HIDE = 'clickachu:panel:hide'
 export const IPC_PANEL_SHOWN = 'clickachu:panel:shown'
+export const IPC_PANEL_READY = 'clickachu:panel:ready'
 export const IPC_PANEL_HANDOFF = 'clickachu:panel:handoff'
 export const IPC_SHOW_NOTIFICATION = 'clickachu:show-notification'
 export const IPC_OPEN_SETTINGS = 'clickachu:open-settings'

@@ -4,12 +4,13 @@
  */
 import type { ContextSnapshot } from '../../src/shared/protocol'
 import type { Sidecar } from './sidecar'
-import { openQuickBar, quickBarWindow } from './windows/quickbar'
+import { hideQuickBar, openQuickBar, quickBarWindow } from './windows/quickbar'
 
 /** The sidecar's own budget is 3 s; give up a little after so the bar still opens. */
 const CAPTURE_TIMEOUT_MS = 3_500
 
 let capturing = false
+let pendingOpen = false
 
 export async function captureContext(sidecar: Sidecar): Promise<ContextSnapshot | null> {
   const signal = AbortSignal.timeout(CAPTURE_TIMEOUT_MS)
@@ -35,19 +36,30 @@ export async function captureContext(sidecar: Sidecar): Promise<ContextSnapshot 
 
 export function createOpenWithContext(sidecar: Sidecar): () => void {
   return () => {
-    // A visible HUD may be behind the source app. Capture before taking focus, and never
-    // steal focus while an earlier capture is still reading that app's selection.
-    if (capturing) return
     const bar = quickBarWindow()
-    if (bar?.isFocused()) {
-      bar.focus()
+    if (bar?.isVisible()) {
+      // Alt+Q is a visibility toggle even when another Clickachu window has focus.
+      pendingOpen = false
+      hideQuickBar()
       return
     }
+    if (capturing) {
+      // Preserve toggle parity if another press arrives while context is being captured.
+      pendingOpen = !pendingOpen
+      return
+    }
+
     capturing = true
+    pendingOpen = true
     void captureContext(sidecar)
-      .then((context) => openQuickBar(context, undefined, false))
+      .then((context) => {
+        if (pendingOpen && !quickBarWindow()?.isVisible()) {
+          openQuickBar(context, undefined, false, 'orb')
+        }
+      })
       .finally(() => {
         capturing = false
+        pendingOpen = false
       })
   }
 }

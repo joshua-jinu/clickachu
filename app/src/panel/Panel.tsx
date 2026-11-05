@@ -61,6 +61,7 @@ function Header({ tab }: { tab: TabId }) {
 
 export function Panel() {
   const [tab, setTab] = useState<TabId>('chat')
+  const [chatFocusRequest, setChatFocusRequest] = useState(0)
   const connection = useStore((s) => s.connection)
   const connectionDetail = useStore((s) => s.connectionDetail)
 
@@ -69,6 +70,16 @@ export function Panel() {
       window.clickachu.onPanelHandoff((handoff) => {
         applyPanelHandoff(handoff)
         setTab('chat')
+      }),
+    [],
+  )
+
+  useEffect(
+    () =>
+      window.clickachu.onPanelShown((focusComposer) => {
+        if (!focusComposer) return
+        setTab('chat')
+        setChatFocusRequest((request) => request + 1)
       }),
     [],
   )
@@ -132,7 +143,7 @@ export function Panel() {
         <ReconnectingBanner status={connection} detail={connectionDetail} />
         <main className="ck-content-stage">
           <div className={tab === 'chat' ? 'ck-chat-stage' : 'hidden'}>
-            <ChatTab />
+            <ChatTab focusRequest={chatFocusRequest} />
           </div>
           {tab === 'memory' && <MemoryTab />}
           {tab === 'log' && <LogTab />}

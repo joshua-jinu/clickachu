@@ -37,38 +37,58 @@ test('spoken introduction remains in the written answer throughout streaming', (
   assert.ok(stripVoiceTags(raw).includes('- Open apps'))
 })
 
-test('Alt+Q captures a background-visible HUD without stealing source focus', async () => {
-  let focused = false
-  let focusCalls = 0
+test('Alt+Q toggles the existing QuickBar by visibility on every press', async () => {
   let captures = 0
-  let resolveCapture
+  let visible = false
   const shown = []
-  const bar = { isVisible: () => true, isFocused: () => focused, focus: () => { focusCalls++ } }
+  const bar = { isVisible: () => visible }
   const { createOpenWithContext } = loadSource('electron/main/capture.ts', {
-    './windows/quickbar': { quickBarWindow: () => bar, openQuickBar: (...args) => shown.push(args) },
+    './windows/quickbar': {
+      quickBarWindow: () => bar,
+      openQuickBar: (...args) => { shown.push(args); visible = true },
+      hideQuickBar: () => { visible = false },
+    },
   }, {
     AbortSignal,
     fetch: async () => {
       captures++
-      return { ok: true, json: () => new Promise((resolve) => { resolveCapture = resolve }) }
+      return { ok: true, json: async () => ({ id: `ctx_${captures}`, selection: 'selected source' }) }
     },
   })
   const open = createOpenWithContext({ backend: async () => ({ baseUrl: 'http://local', token: 'test' }) })
-  open()
-  open()
-  await new Promise(setImmediate)
-  assert.equal(captures, 1)
-  assert.equal(shown.length, 0)
-  assert.equal(focusCalls, 0)
-  resolveCapture({ id: 'ctx_new', selection: 'selected source' })
-  await new Promise(setImmediate)
-  assert.equal(shown.length, 1)
-  assert.equal(shown[0][0].id, 'ctx_new')
-  assert.equal(shown[0][2], false) // text shortcut never implicitly starts the microphone
-  focused = true
-  open()
-  assert.equal(focusCalls, 1)
-  assert.equal(shown.length, 1) // refocusing must not erase the captured source
+
+  for (const shouldBeVisible of [true, false, true, false, true]) {
+    open()
+    await new Promise(setImmediate)
+    assert.equal(visible, shouldBeVisible)
+  }
+
+  assert.equal(captures, 3)
+  assert.equal(shown.length, 3)
+  assert.equal(shown[0][0].id, 'ctx_1')
+  assert.equal(shown[0][2], false) // Alt+Q opens the QuickBar with its microphone off
+  assert.equal(shown[0][3], 'orb') // Keep the composer beside the existing floating orb
+})
+
+test('activity timeline shows successful steps only and hides internal recovery chatter', () => {
+  const { isUserFacingActivity } = loadSource('src/shared/activityVisibility.ts')
+  const { isApprovalTimeout } = loadSource('src/shared/timeouts.ts')
+  const { StepTimeline } = loadSource('src/shared/components/StepTimeline.tsx', {
+    '../timeouts': { isApprovalTimeout },
+  })
+  const html = renderToStaticMarkup(React.createElement(StepTimeline, {
+    steps: [
+      { step_id: 'ok', tool: 'read_file', summary: 'Read project settings', tier: 'safe', status: 'ok', verified: true, startedAt: 1, durationMs: 10 },
+      { step_id: 'failed', tool: 'desktop_action', summary: 'Internal error: first attempt failed', tier: 'safe', status: 'failed', verified: false, startedAt: 2, durationMs: 10 },
+      { step_id: 'running', tool: 'write_file', summary: 'Writing draft', tier: 'safe', status: 'running', verified: null, startedAt: 3, durationMs: null },
+    ],
+  }))
+
+  assert.match(html, /Read project settings/)
+  assert.doesNotMatch(html, /Internal error|first attempt failed|Writing draft/)
+  assert.equal(isUserFacingActivity('Direct method did not finish; inspecting the UI…'), false)
+  assert.equal(isUserFacingActivity('Skipping a retry of a failed action; choosing another…'), false)
+  assert.equal(isUserFacingActivity('Reading controls in Settings…'), true)
 })
 
 test('panel handoff carries the source and conversation; new chat and Remove clear it', () => {
@@ -116,7 +136,10 @@ test('plan and native reasoning events do not replace or contaminate answer text
 })
 
 test('execution plan is visible without inventing a native reasoning trace', () => {
-  const { RunDetails } = loadSource('src/shared/components/RunDetails.tsx')
+  const { isUserFacingActivity } = loadSource('src/shared/activityVisibility.ts')
+  const { RunDetails } = loadSource('src/shared/components/RunDetails.tsx', {
+    '../activityVisibility': { isUserFacingActivity },
+  })
   const html = renderToStaticMarkup(React.createElement(RunDetails, {
     run: { plan: 'Create an empty document.', status: 'running' },
   }))
@@ -125,7 +148,7 @@ test('execution plan is visible without inventing a native reasoning trace', () 
   assert.doesNotMatch(html, /Model reasoning/)
 })
 
-test('a tool timeout is not reported as an expired approval', () => {
+test('failed tool timeout details are hidden from the activity timeline', () => {
   const { isApprovalTimeout } = loadSource('src/shared/timeouts.ts')
   assert.equal(isApprovalTimeout('web_fetch timed out after 12s'), false)
   assert.equal(isApprovalTimeout('Action denied: approval timed out'), true)
@@ -136,7 +159,8 @@ test('a tool timeout is not reported as an expired approval', () => {
     steps: [{ step_id: 'page', tool: 'web_fetch', status: 'failed', durationMs: 12000,
       summary: 'web_fetch timed out after 12s' }],
   }))
-  assert.match(html, /Tool execution timed out/)
+  assert.equal(html, '')
+  assert.doesNotMatch(html, /Tool execution timed out/)
   assert.doesNotMatch(html, /Approval timed out/)
 })
 const ollamaHelpers = () => loadSource('src/shared/ollama.ts', {}, { URL })

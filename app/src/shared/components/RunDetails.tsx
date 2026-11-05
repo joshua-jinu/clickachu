@@ -1,4 +1,5 @@
 import type { RunState } from '../store'
+import { isUserFacingActivity } from '../activityVisibility'
 
 /** Plans describe the workflow. Native reasoning is shown only when the provider sends it. */
 export function RunDetails({ run }: { run: RunState }) {
@@ -28,7 +29,7 @@ export function RunDetails({ run }: { run: RunState }) {
           <div className="mt-2 whitespace-pre-wrap text-ck-text/80">{run.reasoning}</div>
         </details>
       )}
-      {run.activity && run.status === 'running' && (
+      {isUserFacingActivity(run.activity) && run.status === 'running' && (
         <p className="text-ck-muted" role="status">{run.activity}</p>
       )}
     </div>

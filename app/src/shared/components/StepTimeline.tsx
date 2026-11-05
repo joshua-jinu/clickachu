@@ -164,10 +164,11 @@ function StepRow({ step }: { step: StepState }) {
 }
 
 export function StepTimeline({ steps }: { steps: StepState[] }) {
-  if (steps.length === 0) return null
+  const successfulSteps = steps.filter((step) => step.status === 'ok')
+  if (successfulSteps.length === 0) return null
   return (
     <ul className="space-y-1" aria-label="Step timeline">
-      {steps.map((st) => (
+      {successfulSteps.map((st) => (
         <StepRow key={st.step_id} step={st} />
       ))}
     </ul>

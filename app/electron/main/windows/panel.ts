@@ -31,6 +31,8 @@ function sidebarBounds(): Rectangle {
 }
 
 let win: BrowserWindow | null = null
+let rendererReady = false
+let pendingPanelFocus: boolean | null = null
 let quitting = false
 let quickBarWorkspacePositioning: {
   capture: () => void
@@ -72,6 +74,12 @@ export function createPanelWindow(): BrowserWindow {
     title: 'Clickachu — Assistant',
     webPreferences: secureWebPreferences(),
   })
+  rendererReady = false
+  pendingPanelFocus = null
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false
+    pendingPanelFocus = null
+  })
   const saveBounds = (): void => {
     if (!win || win.isMaximized() || win.isMinimized()) return
     const b = win.getBounds()
@@ -90,14 +98,35 @@ export function createPanelWindow(): BrowserWindow {
   })
   win.on('closed', () => {
     win = null
+    rendererReady = false
+    pendingPanelFocus = null
   })
   loadPage(win, 'panel')
   return win
 }
 
-export function showPanel(takeFocus = true): void {
+/** Called after Panel subscribes to the shown event. */
+export function setPanelRendererReady(): void {
+  rendererReady = true
+  if (win?.isVisible() && pendingPanelFocus !== null) {
+    win.webContents.send(IPC_PANEL_SHOWN, pendingPanelFocus)
+    pendingPanelFocus = null
+  }
+}
+
+function notifyPanelShown(focusComposer: boolean): void {
+  if (!win) return
+  if (rendererReady) {
+    win.webContents.send(IPC_PANEL_SHOWN, focusComposer)
+  } else {
+    pendingPanelFocus = focusComposer
+  }
+}
+
+export function showPanel(takeFocus = true, focusComposer = takeFocus): void {
   if (!win) createPanelWindow()
   if (!win) return
+  const focusOnOpen = focusComposer && (!win.isVisible() || win.isMinimized())
   const bounds = sidebarBounds()
   // Reassert native geometry on every open; hidden windows can retain stale bounds across
   // display/work-area changes. Restore first so minimized/maximized state cannot override it.
@@ -113,7 +142,7 @@ export function showPanel(takeFocus = true): void {
   } else {
     win.showInactive()
   }
-  win.webContents.send(IPC_PANEL_SHOWN)
+  notifyPanelShown(focusOnOpen)
 }
 
 export function openPanelWithHandoff(handoff?: PanelHandoff): void {
@@ -129,7 +158,7 @@ export function openPanelWithHandoff(handoff?: PanelHandoff): void {
 }
 
 export function openPanelInSettings(): void {
-  showPanel()
+  showPanel(true, false)
   if (!win) return
   if (win.webContents.isLoading()) {
     win.webContents.once('did-finish-load', () => {
@@ -142,6 +171,7 @@ export function openPanelInSettings(): void {
 
 export function hidePanel(): void {
   if (win?.isVisible()) {
+    pendingPanelFocus = null
     win.hide()
     restoreOrbAfterWorkspace()
     quickBarWorkspacePositioning?.restore()
