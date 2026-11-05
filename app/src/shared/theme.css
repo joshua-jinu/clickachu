@@ -67,10 +67,7 @@ html.ck-transparent body {
 .ck-glass {
   background: linear-gradient(165deg, rgba(19, 19, 31, 0.96) 0%, rgba(10, 10, 18, 0.97) 100%);
   border: 1px solid rgba(255, 255, 255, 0.085);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 0 1px rgba(0, 0, 0, 0.5),
-    0 20px 44px -8px rgba(0, 0, 0, 0.65);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(24px);
 }
 
@@ -341,7 +338,7 @@ html.ck-transparent body {
 .ck-app-shell [class*="bg-emerald-"] { background-color:rgba(118,217,239,.12)!important; }
 .ck-app-shell [class*="border-emerald-"] { border-color:rgba(118,217,239,.28)!important; }
 .ck-app-shell [class*="animate-spin"] { border-color:#76d9ef; border-top-color:transparent; }
-.ck-glass { border-radius:8px!important; border-color:rgba(118,217,239,.15); background:linear-gradient(155deg,rgba(19,24,28,.98),rgba(9,12,15,.98)); box-shadow:0 24px 70px rgba(0,0,0,.68),inset 0 1px rgba(255,255,255,.05); backdrop-filter:blur(22px); }
+.ck-glass { border-radius:8px!important; border-color:rgba(118,217,239,.15); background:linear-gradient(155deg,rgba(19,24,28,.98),rgba(9,12,15,.98)); box-shadow:inset 0 1px rgba(255,255,255,.05); backdrop-filter:blur(22px); }
 .ck-orb-stage { background:radial-gradient(circle,rgba(118,217,239,.10),rgba(12,15,18,.45) 52%,transparent 76%); }
 .ck-glass .ck-orb-stage { width:132px!important; height:132px!important; }
 .ck-glass .ck-orb-stage > span { border-color:rgba(118,217,239,.20)!important; box-shadow:0 0 20px rgba(118,217,239,.09)!important; }
