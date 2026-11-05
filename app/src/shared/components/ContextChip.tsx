@@ -23,7 +23,7 @@ export function ContextChip({ context, dropped, expanded, onToggle, onDrop }: Co
     ? 'selection removed'
     : lines
       ? `${lines} line${lines === 1 ? '' : 's'} selected`
-      : null
+      : 'no selected text captured'
   const label = [context?.app, context?.project?.name, selectionLabel].filter(Boolean).join(' · ')
   const chipClass =
     'inline-flex max-w-full items-center gap-1.5 rounded-full border border-ck-border bg-white/5 px-2.5 py-0.5 text-xs text-ck-muted'

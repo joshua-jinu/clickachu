@@ -413,10 +413,14 @@ export function QuickBar() {
         ({ maxHeight: mh, context: captured, initialAction, isListening: listening, side: s }) => {
           setMaxHeight(mh)
           setSide(s ?? 'left')
-          if (!runningRef.current) {
+          // A fresh Alt+Q selection is the source for the next message, even while an
+          // earlier run is finishing. That run already owns its original context ID.
+          if (captured?.selection || !runningRef.current) {
             setContext(captured)
             setSelectionDropped(false)
-            setShowSelection(false)
+            setShowSelection(Boolean(captured?.selection))
+          }
+          if (!runningRef.current) {
             setExchanges([])
             setPrompt('')
             setNotice('')

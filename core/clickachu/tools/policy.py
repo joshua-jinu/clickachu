@@ -284,6 +284,7 @@ def decide(
     roots: Sequence[AllowedRoot] = (),
     trusted: TrustStore | Collection[tuple[str, str]] | Collection[str] | None = None,
     sensitive_domains: Sequence[str] = DEFAULT_SENSITIVE_DOMAINS,
+    run_id: str | None = None,
 ) -> PolicyDecision:
     """Decide AUTO / ASK / DENY from the tool's declared tier and arguments (PLAN §13.2)."""
     if tool.tier == Tier.BLOCKED:
@@ -302,7 +303,9 @@ def decide(
                 return PolicyDecision(action=PolicyAction.DENY, reason=err, log_decision="blocked")
         return PolicyDecision(action=PolicyAction.ASK, reason="individual host script approval")
     if tool.name == "desktop_action":
-        return PolicyDecision(action=PolicyAction.ASK, reason="approve observed desktop action")
+        from clickachu.tools.desktop_policy import desktop_decision
+
+        return desktop_decision(args, run_id, sensitive_domains)
     if tool.name == "workspace_files" and getattr(args, "operation", "export") != "export":
         for path in tool.read_paths(args):
             if err := check_path_allowed(path, roots, require_write=False):

@@ -137,7 +137,6 @@ class _ActiveRun:
     checkpoint: dict[str, Any] = field(default_factory=dict)
     conversation_id: str = ""
     started: float = field(default_factory=time.monotonic)
-    window_grants: set[tuple[int, int]] = field(default_factory=set)
     goal: RequestGoal | None = None
     terminal_sent: bool = False
 
@@ -1565,6 +1564,7 @@ class Orchestrator:
                         roots=roots,
                         trusted=trust_store,
                         sensitive_domains=latest_settings.sensitive_domains,
+                        run_id=msg.run_id,
                     )
 
                     if decision.action == PolicyAction.DENY:
@@ -1605,13 +1605,9 @@ class Orchestrator:
                         continue
 
                     log_decision = decision.log_decision
-                    scope = (
-                        action_scope(parsed_args, msg.run_id)
-                        if tool.name == "desktop_action"
-                        else None
-                    )
-                    task_granted = scope is not None and scope in active.window_grants
-                    if decision.action == PolicyAction.ASK and not task_granted:
+                    if decision.action == PolicyAction.ASK:
+                        # Register before broadcasting: a fast renderer can reply immediately.
+                        active.approvals[step_id] = asyncio.get_running_loop().create_future()
                         await self._emit(
                             ApprovalRequestEvent(
                                 run_id=msg.run_id,
@@ -1680,8 +1676,8 @@ class Orchestrator:
                                 await set_orb("idle")
                                 return
                             continue
-                        if user_decision == "task" and scope is not None:
-                            active.window_grants.add(scope)
+                        # Legacy 'task' approvals authorize this action only. Routine gestures
+                        # are automatic; consequential actions must not inherit a window grant.
                         if user_decision == "always" and tool.name not in (
                             "execute_code",
                             "desktop_action",
@@ -2172,8 +2168,10 @@ class Orchestrator:
         self, active: _ActiveRun, step_id: str, *, timeout_seconds: float | None = None
     ) -> tuple[ApprovalDecision, bool]:
         loop = asyncio.get_running_loop()
-        fut: asyncio.Future[ApprovalDecision] = loop.create_future()
-        active.approvals[step_id] = fut
+        fut = active.approvals.get(step_id)
+        if fut is None:
+            fut = loop.create_future()
+            active.approvals[step_id] = fut
         try:
             decision = await asyncio.wait_for(
                 fut,

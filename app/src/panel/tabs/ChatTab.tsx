@@ -11,7 +11,7 @@ import { StepTimeline } from '@shared/components/StepTimeline'
 import { RunTimer } from '@shared/components/RunTimer'
 import { RunDetails } from '@shared/components/RunDetails'
 import type { ApprovalDecision } from '@shared/protocol'
-import { recordChatRun, startNewChat, useStore } from '@shared/store'
+import { recordChatRun, startNewChat, submitApproval, useStore } from '@shared/store'
 import { stripVoiceTags } from '@shared/voiceSpeech'
 import { isApprovalTimeout } from '@shared/timeouts'
 import { ws } from '@shared/ws'
@@ -24,7 +24,7 @@ function ChatTurn({ runId }: { runId: string }) {
   const pendingApprovals = run.steps.filter((st) => st.status === 'awaiting_approval')
 
   function decide(stepId: string, decision: ApprovalDecision) {
-    ws.send({ type: 'approve', run_id: runId, step_id: stepId, decision })
+    return submitApproval(ws, runId, stepId, decision)
   }
 
   return (

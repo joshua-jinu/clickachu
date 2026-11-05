@@ -165,6 +165,20 @@ function patchStep(runId: string, stepId: string, patch: Partial<StepState>): vo
   }))
 }
 
+/** Keep the approval visible when sending fails; retire it as soon as a decision is sent. */
+export function submitApproval(
+  client: Pick<WsClient, 'send'>, runId: string, stepId: string,
+  decision: import('./protocol').ApprovalDecision,
+): boolean {
+  try {
+    if (!client.send({ type: 'approve', run_id: runId, step_id: stepId, decision })) return false
+  } catch {
+    return false
+  }
+  patchStep(runId, stepId, { status: 'running', decision })
+  return true
+}
+
 /** Record a run's prompt/answer in the panel's Chat history (used by ChatTab and QuickBar hand-off). */
 export function recordChatRun(opts: {
   runId: string

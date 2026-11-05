@@ -137,12 +137,18 @@ class RealWin32:
 
     @staticmethod
     def _own_process_family() -> frozenset[int]:
-        """Us plus every ancestor (uv launcher, Electron main): their windows are ours."""
+        """Only this sidecar and its explicitly identified Electron main process are ours.
+
+        Ancestors also include the user's editor/terminal when started with npm run dev.
+        Treating those as our windows silently disables capture from VS Code and terminals.
+        """
         pids = {os.getpid()}
         try:
-            pids.update(p.pid for p in psutil.Process().parents())
-        except psutil.Error as exc:
-            log.warning("could not walk parent processes: %s", exc)
+            main_pid = int(os.environ.get("CLICKACHU_MAIN_PID", "0"))
+            if main_pid > 0 and main_pid in {p.pid for p in psutil.Process().parents()}:
+                pids.add(main_pid)
+        except (ValueError, psutil.Error) as exc:
+            log.warning("could not identify Clickachu main process: %s", exc)
         return frozenset(pids)
 
     def focus_window(self, hwnd: int) -> None:

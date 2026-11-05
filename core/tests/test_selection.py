@@ -120,6 +120,42 @@ def test_waits_for_modifiers_before_copying() -> None:
     assert 0.1 <= api.t < 0.3
 
 
+def test_alt_q_capture_waits_for_a_normal_longer_key_release() -> None:
+    api = FakeWin32(app_selection="selected source", modifiers_released_after=0.65)
+    assert capture_selection(api).text == "selected source"
+    assert api.chords == [COPY]
+
+
+def test_async_editor_copy_has_time_to_reach_the_clipboard() -> None:
+    class SlowCopy(FakeWin32):
+        copy_pending = False
+
+        def send_chord(self, *vks):
+            self.chords.append(vks)
+            self.copy_pending = vks == COPY
+
+        def sleep(self, seconds):
+            super().sleep(seconds)
+            if self.copy_pending and self.t >= 0.4:
+                self._set("delayed selected text")
+                self.copy_pending = False
+
+    api = SlowCopy()
+    assert capture_selection(api).text == "delayed selected text"
+    assert api.clipboard == "previous clipboard"
+
+
+def test_foreground_change_during_uia_does_not_attach_another_apps_text() -> None:
+    class Switching(FakeWin32):
+        def focused_element(self):
+            self.foreground = self.other_window
+            return FocusedElement("Edit", "other app text")
+
+    api = Switching()
+    assert capture_selection(api).text is None
+    assert api.chords == []
+
+
 def test_modifiers_stuck_down_skips_clipboard_fallback() -> None:
     api = FakeWin32(app_selection="never", modifiers_released_after=99)
     raw = capture_selection(api)

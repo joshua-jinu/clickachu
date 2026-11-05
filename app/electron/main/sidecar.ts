@@ -104,6 +104,7 @@ export class Sidecar extends EventEmitter<SidecarEvents> {
       ...process.env,
       // Never on the command line — other processes can read argv (§6.2).
       CLICKACHU_TOKEN: this.token,
+      CLICKACHU_MAIN_PID: String(process.pid),
       PYTHONUNBUFFERED: '1',
     }
     if (this.devOrigin) env['CLICKACHU_ALLOWED_ORIGINS'] = this.devOrigin

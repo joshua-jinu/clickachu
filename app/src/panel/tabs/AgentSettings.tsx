@@ -8,6 +8,10 @@ export function AgentSettings({ form, onChange }: {
   return (
     <div className="space-y-3 border-t border-white/10 pt-3">
       <h3 className="text-xs font-semibold text-ck-text">Agent capabilities</h3>
+      <p className="text-[11px] text-ck-muted">
+        Routine navigation, search, scrolling, and playback run automatically using observed controls.
+        Consequential changes and unidentified controls still ask for approval.
+      </p>
       {form.provider === 'ollama' && <>
         <label className="flex items-center gap-2 text-xs text-ck-muted">
           <input type="checkbox" checked={form.ollama_cpu_only}

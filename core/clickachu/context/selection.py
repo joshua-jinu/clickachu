@@ -40,8 +40,9 @@ TERMINAL_PROCESSES = frozenset(
 XTERM_HOSTS = frozenset({"code.exe", "cursor.exe"})
 
 MODIFIER_RELEASE_TIMEOUT_S = 0.3
+CAPTURE_MODIFIER_TIMEOUT_S = 1.2
 CLIPBOARD_POLL_S = 0.02
-CLIPBOARD_TIMEOUT_S = 0.25
+CLIPBOARD_TIMEOUT_S = 0.75
 FOCUS_TIMEOUT_S = 0.3
 
 
@@ -102,9 +103,9 @@ def is_terminal(process: str, focused_class: str) -> bool:
     return name in XTERM_HOSTS and "xterm" in focused_class.lower()
 
 
-def wait_for_modifier_release(api: Win32) -> bool:
+def wait_for_modifier_release(api: Win32, timeout_s: float = MODIFIER_RELEASE_TIMEOUT_S) -> bool:
     """§10 step 2: a synthetic Ctrl+C must not arrive as Ctrl+Alt+C. False if still held."""
-    deadline = api.now() + MODIFIER_RELEASE_TIMEOUT_S
+    deadline = api.now() + timeout_s
     while api.modifiers_down():
         if api.now() >= deadline:
             return False
@@ -128,9 +129,13 @@ def capture_selection(api: Win32) -> RawSelection:
     if api.is_own_process(pid):
         return result(None, "none")
 
-    released = wait_for_modifier_release(api)
+    released = wait_for_modifier_release(api, CAPTURE_MODIFIER_TIMEOUT_S)
+    if api.foreground_window() != hwnd:
+        return result(None, "none")
     focus = api.focused_element()
     terminal = is_terminal(process, focus.class_name)
+    if api.foreground_window() != hwnd:
+        return result(None, "none", terminal)
     if focus.is_password:
         return result(None, "none", terminal)
     if focus.selection:

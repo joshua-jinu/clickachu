@@ -203,3 +203,49 @@ test('run errors and Stop acknowledgements release busy state and finish pending
   assert.equal(store.useStore.getState().runs.done.status, 'done')
   assert.equal(store.useStore.getState().runs.done.text, 'Completed answer')
 })
+
+test('approval decisions stay clickable after a send failure and retire after a successful send', () => {
+  const store = loadSource('src/shared/store.ts', { './api': { api: { getLog: async () => [] } } })
+  const handlers = {}
+  store.bindStore({ onStatus: () => () => {}, on: (name, handler) => { handlers[name] = handler; return () => {} } })
+  store.recordChatRun({ runId: 'approval', prompt: 'Important operation' })
+  handlers['step.started']({ run_id: 'approval', step_id: 'step', tool: 'desktop_action', summary: 'Buy now', tier: 'confirm' })
+  handlers['approval.request']({ run_id: 'approval', step_id: 'step', args: {}, preview: 'Buy now' })
+  assert.equal(store.submitApproval({ send: () => false }, 'approval', 'step', 'approve'), false)
+  assert.equal(store.useStore.getState().runs.approval.steps[0].status, 'awaiting_approval')
+  assert.equal(store.submitApproval({ send: () => { throw new Error('socket closed') } }, 'approval', 'step', 'approve'), false)
+  assert.equal(store.useStore.getState().runs.approval.steps[0].status, 'awaiting_approval')
+  const sent = []
+  assert.equal(store.submitApproval({ send: (m) => { sent.push(m); return true } }, 'approval', 'step', 'approve'), true)
+  assert.equal(sent[0].decision, 'approve')
+  assert.equal(store.useStore.getState().runs.approval.steps[0].status, 'running')
+  assert.equal(store.useStore.getState().runs.approval.steps[0].decision, 'approve')
+})
+
+test('approval buttons wrap in the sidebar without offering a consequential window-wide bypass', () => {
+  const { ApprovalCard } = loadSource('src/shared/components/ApprovalCard.tsx')
+  const html = renderToStaticMarkup(React.createElement(ApprovalCard, {
+    step: { step_id: '1', tool: 'desktop_action', preview: 'Buy now', status: 'awaiting_approval' },
+    onDecide: () => true,
+  }))
+  assert.match(html, /flex-wrap/)
+  assert.match(html, /Approve/)
+  assert.match(html, /Deny/)
+  assert.doesNotMatch(html, /Allow this window/)
+})
+
+test('captured selection is visible in the context chip and preview', () => {
+  const { ContextChip, SelectionPreview } = loadSource('src/shared/components/ContextChip.tsx')
+  const context = { id: 'source', app: 'VS Code', selection: 'first line\nsecond line', selection_method: 'clipboard' }
+  const chip = renderToStaticMarkup(React.createElement(ContextChip, {
+    context, dropped: false, expanded: true, onToggle: () => {}, onDrop: () => {},
+  }))
+  assert.match(chip, /2 lines selected/)
+  const preview = renderToStaticMarkup(React.createElement(SelectionPreview, { context }))
+  assert.match(preview, /first line/)
+  assert.match(preview, /second line/)
+  const missing = renderToStaticMarkup(React.createElement(ContextChip, {
+    context: { ...context, selection: null }, dropped: false, expanded: false, onToggle: () => {}, onDrop: () => {},
+  }))
+  assert.match(missing, /no selected text captured/)
+})

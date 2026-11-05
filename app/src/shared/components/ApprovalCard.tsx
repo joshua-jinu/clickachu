@@ -2,13 +2,13 @@
  * ApprovalCard (PLAN §9.3): tool name, monospace preview (line-diff view for write_file),
  * Approve / Always / Deny buttons, and Enter = approve / Esc = deny when focused.
  */
-import { type KeyboardEvent, useEffect, useRef } from 'react'
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { ApprovalDecision } from '../protocol'
 import type { StepState } from '../store'
 
 interface ApprovalCardProps {
   step: StepState
-  onDecide: (decision: ApprovalDecision) => void
+  onDecide: (decision: ApprovalDecision) => boolean
 }
 
 function isDiffView(tool: string, preview: string): boolean {
@@ -57,6 +57,18 @@ function DiffPreview({ text, args }: { text: string; args?: Record<string, unkno
 export function ApprovalCard({ step, onDecide }: ApprovalCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
   const preview = step.preview ?? step.summary
+  const [submitted, setSubmitted] = useState(false)
+  const [sendError, setSendError] = useState('')
+
+  function sendDecision(decision: ApprovalDecision) {
+    if (submitted) return
+    if (!onDecide(decision)) {
+      setSendError('Not connected. Your decision was not sent. Reconnect and try again.')
+      return
+    }
+    setSendError('')
+    setSubmitted(true)
+  }
 
   useEffect(() => {
     cardRef.current?.focus()
@@ -66,7 +78,7 @@ export function ApprovalCard({ step, onDecide }: ApprovalCardProps) {
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
-      onDecide('deny')
+      sendDecision('deny')
       return
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
@@ -74,7 +86,7 @@ export function ApprovalCard({ step, onDecide }: ApprovalCardProps) {
       if (e.target instanceof HTMLButtonElement) return
       e.preventDefault()
       e.stopPropagation()
-      onDecide('approve')
+      sendDecision('approve')
     }
   }
 
@@ -106,35 +118,30 @@ export function ApprovalCard({ step, onDecide }: ApprovalCardProps) {
         </pre>
       )}
 
-      <div className="flex items-center gap-2 pt-0.5">
+      {sendError && <p role="alert" className="text-red-200">{sendError}</p>}
+      <fieldset disabled={submitted} className="flex flex-wrap items-center gap-2 pt-0.5 disabled:opacity-60">
         <button
           type="button"
-          onClick={() => onDecide('approve')}
+          onClick={() => sendDecision('approve')}
           className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-500"
         >
-          Approve
+          {submitted ? 'Decision sent' : 'Approve'}
         </button>
-        {step.tool === 'desktop_action' && (
-          <button type="button" onClick={() => onDecide('task')}
-            className="rounded-md border border-ck-violet/60 px-3 py-1 text-xs text-ck-text">
-            Allow this window for this task
-          </button>
-        )}
         {!['execute_code', 'desktop_action', 'workspace_files'].includes(step.tool) && <button
           type="button"
-          onClick={() => onDecide('always')}
+          onClick={() => sendDecision('always')}
           className="rounded-md border border-ck-violet/60 bg-ck-violet/20 px-3 py-1 text-xs font-medium text-ck-text hover:bg-ck-violet/30"
         >
           Always
         </button>}
         <button
           type="button"
-          onClick={() => onDecide('deny')}
+          onClick={() => sendDecision('deny')}
           className="rounded-md border border-red-400/40 bg-red-500/15 px-3 py-1 text-xs font-medium text-red-200 hover:bg-red-500/25"
         >
           Deny
         </button>
-      </div>
+      </fieldset>
     </div>
   )
 }

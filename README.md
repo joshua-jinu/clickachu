@@ -12,7 +12,7 @@ Clickachu is an agentic desktop companion built specifically for Windows 11. Unl
 - **Floating Orb**: A lightweight, GPU-efficient 3D particle sphere that sits quietly on your screen and animates state changes (idle, thinking, attention, acting, error).
 - **Quick Bar (`Alt+Q`)**: A fast, translucent command palette docked above your cursor that instantly captures the foreground app and selected text (code, logs, articles) with zero-configuration action chips (`Summarise`, `Explain`, `Fix`, `Translate`, `Rewrite`).
 - **Side Panel (`Ctrl+Alt+P`)**: A slide-in workspace featuring interactive Chat with step-by-step tool execution timelines, diff previews, project manager, persistent memory browser, action logs, and configuration.
-- **Human-in-the-Loop Policy Engine**: The LLM *never* directly executes actions. It returns proposed tool calls that are vetted in code by policy tiers (Read-only, State-changing, High-risk) and require explicit user approval before execution.
+- **Human-in-the-Loop Policy Engine**: The LLM proposes tool calls checked by the policy engine. Routine observed navigation, search, scrolling, item selection, and playback run automatically. Consequential changes (such as purchases, sending, deletion, installation, or security changes), unidentified targets, and host scripts still require confirmation. Desktop approvals apply to the individual action, never the whole window.
 
 ---
 
