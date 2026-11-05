@@ -9,7 +9,7 @@ import {
   IPC_PANEL_SHOWN,
   type PanelHandoff,
 } from '../../../src/shared/bridge'
-import { prefs } from '../store'
+import { prefs, type Point } from '../store'
 import { loadPage, secureWebPreferences } from './common'
 import { positionOrbForWorkspace, restoreOrbAfterWorkspace } from './orb'
 
@@ -32,9 +32,20 @@ function sidebarBounds(): Rectangle {
 
 let win: BrowserWindow | null = null
 let quitting = false
+let quickBarWorkspacePositioning: {
+  capture: () => void
+  position: (bounds: Rectangle, orbOffset: Point) => void
+  restore: () => void
+} | null = null
 app.on('before-quit', () => {
   quitting = true
 })
+
+export function registerQuickBarWorkspacePositioning(
+  handlers: NonNullable<typeof quickBarWorkspacePositioning>,
+): void {
+  quickBarWorkspacePositioning = handlers
+}
 
 export function panelWindow(): BrowserWindow | null {
   return win
@@ -65,7 +76,10 @@ export function createPanelWindow(): BrowserWindow {
     if (!win || win.isMaximized() || win.isMinimized()) return
     const b = win.getBounds()
     prefs.set('assistantBounds', { x: b.x, y: b.y, width: b.width, height: b.height })
-    if (win.isVisible()) positionOrbForWorkspace(b)
+    if (win.isVisible()) {
+      const orbOffset = positionOrbForWorkspace(b)
+      quickBarWorkspacePositioning?.position(b, orbOffset)
+    }
   }
   win.on('resize', saveBounds)
   win.on('move', saveBounds)
@@ -90,7 +104,9 @@ export function showPanel(takeFocus = true): void {
   if (win.isMinimized()) win.restore()
   if (win.isMaximized()) win.unmaximize()
   win.setBounds(bounds)
-  positionOrbForWorkspace(bounds)
+  quickBarWorkspacePositioning?.capture()
+  const orbOffset = positionOrbForWorkspace(bounds)
+  quickBarWorkspacePositioning?.position(bounds, orbOffset)
   if (takeFocus) {
     win.show()
     win.focus()
@@ -128,6 +144,7 @@ export function hidePanel(): void {
   if (win?.isVisible()) {
     win.hide()
     restoreOrbAfterWorkspace()
+    quickBarWorkspacePositioning?.restore()
   }
 }
 

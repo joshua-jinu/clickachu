@@ -6,7 +6,7 @@
 import { BrowserWindow, type Rectangle, screen } from 'electron'
 import type { OrbDragPhase } from '../../../src/shared/bridge'
 import { type Point, prefs } from '../store'
-import { loadPage, secureWebPreferences } from './common'
+import { animateWindowPosition, loadPage, secureWebPreferences } from './common'
 
 const SIZE = 120
 const HIT_RADIUS = 48
@@ -20,6 +20,7 @@ let ignoringMouse = true
 let hitPollTimer: ReturnType<typeof setInterval> | null = null
 let workspaceBounds: Rectangle | null = null
 let boundsBeforeWorkspace: Rectangle | null = null
+let workspaceOffset: Point = { x: 0, y: 0 }
 
 export function orbWindow(): BrowserWindow | null {
   return win
@@ -138,37 +139,59 @@ export function setOrbExpanded(expanded: boolean): void {
   }
 }
 
-/** Dock the compact orb beside the assistant workspace without changing its saved home position. */
-export function positionOrbForWorkspace(bounds: Rectangle): void {
-  if (!win) return
+/** Dock the orb beside the workspace and return its displacement from its saved home bounds. */
+export function positionOrbForWorkspace(bounds: Rectangle): Point {
+  if (!win) return { x: 0, y: 0 }
   if (boundsBeforeWorkspace === null) boundsBeforeWorkspace = win.getBounds()
   workspaceBounds = bounds
   const area = screen.getDisplayMatching(bounds).workArea
   const available = availableArea(area)
-  const targetArea = available.width >= SIZE ? available : area
-  const next = clampBounds(
-    {
-      x: available.x + available.width - SIZE - EDGE_MARGIN,
-      y: available.y + available.height - SIZE - EDGE_MARGIN,
-      width: SIZE,
-      height: SIZE,
-    },
-    targetArea,
-  )
-  moveTo(next, false)
+  const origin = boundsBeforeWorkspace
+  const current = win.getBounds()
+  const targetArea = available.width >= SIZE + EDGE_MARGIN * 2 ? available : area
+  const minX = targetArea.x + EDGE_MARGIN
+  const maxX = Math.max(minX, targetArea.x + targetArea.width - current.width - EDGE_MARGIN)
+  const minY = targetArea.y + EDGE_MARGIN
+  const maxY = Math.max(minY, targetArea.y + targetArea.height - current.height - EDGE_MARGIN)
+  const centeredX = origin.x + (origin.width - current.width) / 2
+  const centeredY = origin.y + (origin.height - current.height) / 2
+  const x = Math.max(minX, Math.min(centeredX, maxX))
+  const y = Math.max(minY, Math.min(centeredY, maxY))
+  animateWindowPosition(win, x, y)
+  workspaceOffset = {
+    x: x + current.width / 2 - (origin.x + origin.width / 2),
+    y: y + current.height / 2 - (origin.y + origin.height / 2),
+  }
+  return workspaceOffset
+}
+
+/** Current displacement from the orb's home position while Workspace is visible. */
+export function orbWorkspaceOffset(): Point {
+  return workspaceOffset
 }
 
 /** Restore the user's last compact orb position when the docked workspace is hidden. */
 export function restoreOrbAfterWorkspace(): void {
   if (!win || boundsBeforeWorkspace === null) {
     workspaceBounds = null
+    workspaceOffset = { x: 0, y: 0 }
     return
   }
   workspaceBounds = null
   const previous = boundsBeforeWorkspace
   boundsBeforeWorkspace = null
-  const saved = prefs.get('orbPosition') ?? { x: previous.x, y: previous.y }
-  moveTo(validPosition(saved), true)
+  workspaceOffset = { x: 0, y: 0 }
+  const current = win.getBounds()
+  const area = screen.getDisplayMatching(previous).workArea
+  const minX = area.x + EDGE_MARGIN
+  const maxX = Math.max(minX, area.x + area.width - current.width - EDGE_MARGIN)
+  const minY = area.y + EDGE_MARGIN
+  const maxY = Math.max(minY, area.y + area.height - current.height - EDGE_MARGIN)
+  animateWindowPosition(
+    win,
+    Math.max(minX, Math.min(previous.x, maxX)),
+    Math.max(minY, Math.min(previous.y, maxY)),
+  )
 }
 
 export function orbDrag(phase: OrbDragPhase): void {
@@ -211,17 +234,6 @@ function availableArea(area: Rectangle): Rectangle {
   const dockedRight = workspaceBounds.x + workspaceBounds.width >= area.x + area.width - 2
   if (!overlapsVertically || !dockedRight) return area
   return { ...area, width: Math.max(0, workspaceBounds.x - area.x) }
-}
-
-function clampBounds(bounds: Rectangle, area: Rectangle): Rectangle {
-  const width = Math.min(bounds.width, area.width)
-  const height = Math.min(bounds.height, area.height)
-  return {
-    x: Math.min(Math.max(bounds.x, area.x), area.x + area.width - width),
-    y: Math.min(Math.max(bounds.y, area.y), area.y + area.height - height),
-    width,
-    height,
-  }
 }
 
 function clampToArea(p: Point, area: Rectangle): Point {

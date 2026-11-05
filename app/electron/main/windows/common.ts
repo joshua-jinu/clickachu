@@ -4,6 +4,41 @@ import { app, type BrowserWindow, shell, type WebPreferences } from 'electron'
 
 export type RendererPage = 'orb' | 'quickbar' | 'panel'
 
+const positionAnimations = new Map<BrowserWindow, ReturnType<typeof setTimeout>>()
+
+/** Ease a native window between positions without changing its dimensions. */
+export function animateWindowPosition(win: BrowserWindow, x: number, y: number): void {
+  const previousTimer = positionAnimations.get(win)
+  if (previousTimer) clearTimeout(previousTimer)
+  positionAnimations.delete(win)
+  if (win.isDestroyed()) return
+
+  const start = win.getBounds()
+  if (start.x === x && start.y === y) return
+  const startedAt = Date.now()
+  const duration = 180
+
+  const step = (): void => {
+    if (win.isDestroyed()) {
+      positionAnimations.delete(win)
+      return
+    }
+    const progress = Math.min(1, (Date.now() - startedAt) / duration)
+    const eased = progress * progress * (3 - 2 * progress)
+    win.setPosition(
+      Math.round(start.x + (x - start.x) * eased),
+      Math.round(start.y + (y - start.y) * eased),
+    )
+    if (progress < 1) {
+      positionAnimations.set(win, setTimeout(step, 16))
+    } else {
+      positionAnimations.delete(win)
+    }
+  }
+
+  positionAnimations.set(win, setTimeout(step, 16))
+}
+
 const devUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 

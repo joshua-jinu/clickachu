@@ -13,9 +13,9 @@ import {
 } from '../../../src/shared/bridge'
 import type { ContextSnapshot, RunAction } from '../../../src/shared/protocol'
 import type { Point } from '../store'
-import { loadPage, secureWebPreferences } from './common'
-import { orbWindow } from './orb'
-import { panelWindow } from './panel'
+import { animateWindowPosition, loadPage, secureWebPreferences } from './common'
+import { orbWindow, orbWorkspaceOffset } from './orb'
+import { panelWindow, registerQuickBarWorkspacePositioning } from './panel'
 
 const WIDTH = 540
 const MIN_HEIGHT = 250
@@ -34,6 +34,9 @@ let workArea: Rectangle | null = null
 let orbCenter: Point | null = null
 let side: 'left' | 'right' = 'left'
 let orbHidden = false
+let quickBarWorkspaceOrigin: Rectangle | null = null
+let quickBarWorkspaceOrbOffset: Point = { x: 0, y: 0 }
+let quickBarWorkspaceOrbCenter: Point | null = null
 
 export function quickBarWindow(): BrowserWindow | null {
   return win
@@ -62,11 +65,14 @@ export function createQuickBarWindow(): BrowserWindow {
   win.setAlwaysOnTop(true, 'pop-up-menu')
 
   win.on('blur', () => {
-    if (!runActive) hideQuickBar()
+    if (!runActive && !panelWindow()?.isVisible()) hideQuickBar()
   })
   win.on('hide', restoreOrb)
   win.on('closed', () => {
     win = null
+    quickBarWorkspaceOrigin = null
+    quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
+    quickBarWorkspaceOrbCenter = null
     restoreOrb()
   })
 
@@ -131,11 +137,81 @@ function restoreOrb(): void {
 
 export function nudgeQuickBarForPanel(): void {
   if (!win || !win.isVisible() || !workArea) return
+  const panel = panelWindow()
+  if (panel?.isVisible() && orbCenter) {
+    positionQuickBarForWorkspace(panel.getBounds(), orbWorkspaceOffset())
+    return
+  }
   const b = win.getBounds()
   const maxRight = usableRight(workArea) - EDGE
   if (b.x + b.width > maxRight) {
     const nextX = clamp(maxRight - WIDTH, workArea.x + EDGE, maxRight - WIDTH)
     win.setBounds({ x: Math.round(nextX), y: b.y, width: WIDTH, height: b.height })
+  }
+}
+
+function captureQuickBarWorkspaceOrigin(): void {
+  if (!win || !win.isVisible() || quickBarWorkspaceOrigin) return
+  quickBarWorkspaceOrigin = win.getBounds()
+  quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
+  quickBarWorkspaceOrbCenter = orbCenter ? { ...orbCenter } : null
+}
+
+function positionQuickBarForWorkspace(panelBounds: Rectangle, orbOffset: Point): void {
+  if (!win || !win.isVisible() || !workArea || !orbCenter) return
+  captureQuickBarWorkspaceOrigin()
+  const origin = quickBarWorkspaceOrigin
+  const originCenter = quickBarWorkspaceOrbCenter
+  if (!origin || !originCenter) return
+
+  const area = screen.getDisplayMatching(panelBounds).workArea
+  const relativeShift = {
+    x: orbOffset.x - quickBarWorkspaceOrbOffset.x,
+    y: orbOffset.y - quickBarWorkspaceOrbOffset.y,
+  }
+  const minX = area.x + EDGE
+  const maxX = Math.min(area.x + area.width - WIDTH - EDGE, panelBounds.x - WIDTH - EDGE)
+  if (maxX < minX) return
+  const current = win.getBounds()
+  const targetX = clamp(origin.x + relativeShift.x, minX, maxX)
+  const targetY = clamp(
+    origin.y + relativeShift.y,
+    area.y + EDGE,
+    area.y + area.height - current.height - EDGE,
+  )
+  animateWindowPosition(win, targetX, targetY)
+  orbCenter = {
+    x: originCenter.x + targetX - origin.x,
+    y: originCenter.y + targetY - origin.y,
+  }
+}
+
+function captureQuickBarOpenedDuringWorkspace(): void {
+  if (!panelWindow()?.isVisible() || !win?.isVisible() || !orbCenter) return
+  quickBarWorkspaceOrigin = win.getBounds()
+  quickBarWorkspaceOrbOffset = orbWorkspaceOffset()
+  quickBarWorkspaceOrbCenter = orbCenter ? { ...orbCenter } : null
+}
+
+function restoreQuickBarAfterWorkspace(): void {
+  const origin = quickBarWorkspaceOrigin
+  const originCenter = quickBarWorkspaceOrbCenter
+  const baselineOffset = quickBarWorkspaceOrbOffset
+  quickBarWorkspaceOrigin = null
+  quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
+  quickBarWorkspaceOrbCenter = null
+  if (!origin || !win || win.isDestroyed()) return
+
+  const current = win.getBounds()
+  const area = workArea ?? screen.getPrimaryDisplay().workArea
+  const targetX = clamp(origin.x - baselineOffset.x, area.x + EDGE, area.x + area.width - WIDTH - EDGE)
+  const targetY = clamp(origin.y - baselineOffset.y, area.y + EDGE, area.y + area.height - current.height - EDGE)
+  animateWindowPosition(win, targetX, targetY)
+  if (originCenter) {
+    orbCenter = {
+      x: originCenter.x + targetX - origin.x,
+      y: originCenter.y + targetY - origin.y,
+    }
   }
 }
 
@@ -166,6 +242,7 @@ export function openQuickBar(
       orb.hide()
       orbHidden = true
     }
+    captureQuickBarOpenedDuringWorkspace()
   } else {
     nudgeQuickBarForPanel()
   }
@@ -181,6 +258,11 @@ export function openQuickBar(
 
 export function hideQuickBar(): void {
   if (win?.isVisible()) win.hide()
+  if (panelWindow()?.isVisible()) {
+    quickBarWorkspaceOrigin = null
+    quickBarWorkspaceOrbOffset = { x: 0, y: 0 }
+    quickBarWorkspaceOrbCenter = null
+  }
   restoreOrb()
 }
 
@@ -203,3 +285,9 @@ export function setQuickBarContentHeight(h: number): void {
   const y = clamp(b.y, workArea.y + 20, workArea.y + workArea.height - height - 20)
   win.setBounds({ x: b.x, y, width: WIDTH, height })
 }
+
+registerQuickBarWorkspacePositioning({
+  capture: captureQuickBarWorkspaceOrigin,
+  position: positionQuickBarForWorkspace,
+  restore: restoreQuickBarAfterWorkspace,
+})
