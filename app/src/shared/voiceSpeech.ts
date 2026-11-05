@@ -6,7 +6,7 @@
 export interface VoiceSplitResult {
   /** Short, natural spoken response (no raw file paths, no code blocks, no markdown clutter). */
   voiceSummary: string
-  /** Full markdown with <voice>...</voice> wrapper removed for clean rendering in the Side Panel. */
+  /** Full markdown with <voice>...</voice> wrapper removed for clean rendering in the assistant workspace. */
   cleanMarkdown: string
   /** True when the response has file paths, code blocks, tool steps, or lengthy technical content. */
   hasTechnicalDetails: boolean
@@ -47,8 +47,8 @@ export function sanitizeForSpeech(text: string): string {
 /**
  * Splits a raw LLM response into:
  * 1) A short conversational `voiceSummary` for the 3D Orb HUD & TTS
- * 2) Full `cleanMarkdown` for the Side Panel
- * 3) `hasTechnicalDetails` flag that triggers automatic Side Panel handoff while continuing to speak
+ * 2) Full `cleanMarkdown` for the assistant workspace
+ * 3) `hasTechnicalDetails` flag that triggers automatic workspace handoff while continuing to speak
  */
 export function splitVoiceAndTechnical(raw: string, hasSteps = false): VoiceSplitResult {
   const withoutThoughts = stripThoughts(raw)
@@ -124,7 +124,7 @@ export function splitVoiceAndTechnical(raw: string, hasSteps = false): VoiceSpli
   if (!spoken || spoken.length < 8) {
     spoken = hasSteps
       ? "I've completed that task and opened the full details on the side."
-      : "I've pulled up the technical details and code in the side panel for you."
+      : "I've pulled up the technical details and code in your assistant workspace."
   } else if (spoken.length > 180) {
     spoken = spoken.slice(0, 177).trimEnd() + '…'
   }

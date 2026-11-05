@@ -108,9 +108,10 @@ export function LogTab() {
       </div>
 
       {error && <p className="text-xs text-red-300">{error}</p>}
+      {!entries && !error && <p className="ck-inline-state">Loading recent activity…</p>}
       {entries && filtered.length === 0 && (
-        <p className="text-xs text-ck-muted">
-          {entries.length === 0 ? 'No actions logged yet.' : 'No entries match the active filters.'}
+        <p className="ck-empty-state ck-empty-inline">
+          {entries.length === 0 ? 'No actions recorded yet.' : 'No activity matches these filters.'}
         </p>
       )}
       <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">

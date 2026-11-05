@@ -17,7 +17,7 @@ export interface MenuActions {
 
 export function buildAppMenu(actions: MenuActions, state: MenuState): Menu {
   const template: MenuItemConstructorOptions[] = [
-    { label: 'Open panel', accelerator: 'Ctrl+Alt+P', click: actions.openPanel },
+    { label: 'Open assistant workspace', accelerator: 'Ctrl+Alt+P', click: actions.openPanel },
     {
       label: state.proactivePaused ? 'Resume proactive' : 'Pause proactive',
       click: actions.toggleProactive,

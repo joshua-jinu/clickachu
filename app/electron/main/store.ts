@@ -8,8 +8,14 @@ export interface Point {
   y: number
 }
 
+export interface WindowBounds extends Point {
+  width: number
+  height: number
+}
+
 interface ShellPrefs {
   orbPosition?: Point
+  assistantBounds?: WindowBounds
 }
 
 // %APPDATA%\Clickachu\shell.json, next to the sidecar's data (CLAUDE.md "Runtime data").

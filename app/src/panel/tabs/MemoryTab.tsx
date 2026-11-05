@@ -262,6 +262,7 @@ export function MemoryTab() {
       />
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {memories === null && <p className="ck-inline-state">Retrieving memory index…</p>}
         {memories?.length === 0 && (
           <p className="text-xs text-ck-muted">
             {query ? 'No matches.' : 'Nothing remembered yet. Tell Clickachu a detail such as “I prefer concise answers”.'}

@@ -1,10 +1,10 @@
 /**
  * Orb page (PLAN §9.1, §9.4, P8).
  * The window is click-through except over the sphere and hover bubble.
- * Click → toggle side panel, drag > 4 px → move (main snaps on release), right-click → context menu.
+ * Click → toggle assistant workspace, drag > 4 px → move (main snaps on release), right-click → context menu.
  * Shows status badge and hover bubble for suggestions (Investigate / Dismiss / Later).
  */
-import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type MutableRefObject, type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@shared/api'
 import type { SuggestionEvent } from '@shared/protocol'
 import { useStore } from '@shared/store'
@@ -34,7 +34,13 @@ interface Press {
   dragging: boolean
 }
 
-export function Orb() {
+export function Orb({
+  onActivate,
+  isEnabled = true,
+  expanded = false,
+  listening = false,
+  sceneHandleRef,
+}: { onActivate?: () => void; isEnabled?: boolean; expanded?: boolean; listening?: boolean; sceneHandleRef?: MutableRefObject<OrbScene | null> }) {
   const orbState = useStore((s) => s.orbState)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<OrbScene | null>(null)
@@ -53,8 +59,15 @@ export function Orb() {
   const [bubbleVisible, setBubbleVisible] = useState(false)
 
   const hidden = orbState === 'hidden'
+  const renderSize = expanded ? 130 : SIZE
+  const renderRadius = expanded ? 54 : RADIUS
+  const hitRadius = expanded ? 70 : HIT_RADIUS
   const visual: OrbVisualState =
-    orbState === 'hidden' || (orbState === 'error' && errorFaded) ? 'idle' : orbState
+    orbState === 'hidden' || (orbState === 'error' && errorFaded)
+      ? 'idle'
+      : listening
+        ? 'listening'
+        : orbState
   const active = hovered || dragging || visual !== 'idle' || Boolean(suggestion)
 
   const visualRef = useRef(visual)
@@ -64,17 +77,21 @@ export function Orb() {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const scene = new OrbScene(canvas, SIZE, RADIUS)
+    const scene = new OrbScene(canvas, renderSize, renderRadius)
     sceneRef.current = scene
+    let activeScene = scene
+    if (sceneHandleRef) sceneHandleRef.current = scene
     scene.start()
 
     const handleContextLost = (e: Event) => {
       e.preventDefault()
     }
     const handleContextRestored = () => {
-      sceneRef.current?.dispose()
-      const newScene = new OrbScene(canvas, SIZE, RADIUS)
+      activeScene.dispose()
+      const newScene = new OrbScene(canvas, renderSize, renderRadius)
+      activeScene = newScene
       sceneRef.current = newScene
+      if (sceneHandleRef) sceneHandleRef.current = newScene
       newScene.setState(visualRef.current)
       newScene.setHovered(hoveredRef.current)
       newScene.start()
@@ -86,10 +103,11 @@ export function Orb() {
     return () => {
       canvas.removeEventListener('webglcontextlost', handleContextLost)
       canvas.removeEventListener('webglcontextrestored', handleContextRestored)
-      scene.dispose()
+      activeScene.dispose()
+      if (sceneHandleRef?.current === activeScene) sceneHandleRef.current = null
       sceneRef.current = null
     }
-  }, [])
+  }, [renderSize, renderRadius, sceneHandleRef])
 
   useEffect(() => {
     visualRef.current = visual
@@ -111,15 +129,17 @@ export function Orb() {
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
-    if (hidden) {
+    if (hidden || !isEnabled) {
       scene.stop()
       hoverRef.current = false
-      window.clickachu.setOrbExpanded(false)
-      window.clickachu.setClickThrough(true)
+      if (hidden) {
+        window.clickachu.setOrbExpanded(false)
+        window.clickachu.setClickThrough(true)
+      }
     } else {
       scene.start()
     }
-  }, [hidden])
+  }, [hidden, isEnabled])
 
   useEffect(() => {
     if (orbState !== 'error') return
@@ -155,14 +175,14 @@ export function Orb() {
     if (rect && rect.width > 0) {
       const orbCenterX = rect.left + rect.width / 2
       const orbCenterY = rect.top + rect.height / 2
-      return Math.hypot(clientX - orbCenterX, clientY - orbCenterY) <= HIT_RADIUS
+      return Math.hypot(clientX - orbCenterX, clientY - orbCenterY) <= hitRadius
     }
     const el = containerRef.current
     const w = el ? el.clientWidth : SIZE
     const orbCenterX = w - SIZE / 2
     const orbCenterY = SIZE / 2
-    return Math.hypot(clientX - orbCenterX, clientY - orbCenterY) <= HIT_RADIUS
-  }, [])
+    return Math.hypot(clientX - orbCenterX, clientY - orbCenterY) <= hitRadius
+  }, [hitRadius])
 
   const isOverBubble = useCallback((clientX: number, clientY: number): boolean => {
     const el = containerRef.current
@@ -219,8 +239,9 @@ export function Orb() {
     setSuggestion(null)
     setBubbleVisible(false)
     window.clickachu.setOrbExpanded(false)
-    window.clickachu.openQuickBar(null, undefined, true)
-  }, [])
+    if (onActivate) onActivate()
+    else window.clickachu.openQuickBar(null, undefined, true)
+  }, [onActivate])
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 || !isOverOrb(e.clientX, e.clientY)) return
@@ -354,7 +375,9 @@ export function Orb() {
   return (
     <div
       ref={containerRef}
-      className="relative flex h-full w-full select-none items-center justify-end"
+      className={expanded
+        ? `ck-orb-expanded-visual relative flex h-full w-[194px] shrink-0 select-none items-center justify-center ${listening ? 'is-listening' : ''}`
+        : 'relative flex h-full w-full select-none items-center justify-end'}
       onClick={handleClick}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -403,36 +426,36 @@ export function Orb() {
       )}
 
       {/* Orb container */}
-      <div ref={orbBoxRef} className="relative h-[120px] w-[120px] shrink-0">
+      <div ref={orbBoxRef} className={expanded ? 'ck-orb-grown relative h-[160px] w-[160px] shrink-0' : 'relative h-[120px] w-[120px] shrink-0'}>
         {!hidden && (
           <div
             className="
               absolute rounded-full
             "
             style={{
-              left: SIZE / 2 - HIT_RADIUS,
-              top: SIZE / 2 - HIT_RADIUS,
-              width: HIT_RADIUS * 2,
-              height: HIT_RADIUS * 2,
+              left: renderSize / 2 - hitRadius,
+              top: renderSize / 2 - hitRadius,
+              width: hitRadius * 2,
+              height: hitRadius * 2,
               backgroundColor: 'rgba(255, 255, 255, 0.01)',
             }}
           />
         )}
         <canvas
           ref={canvasRef}
-          width={SIZE}
-          height={SIZE}
+          width={renderSize}
+          height={renderSize}
           className="pointer-events-none absolute inset-0 transition-opacity duration-500"
           style={{
-            width: SIZE,
-            height: SIZE,
+            width: renderSize,
+            height: renderSize,
             opacity: hidden ? 0 : dimmed ? DIM_OPACITY : 1,
           }}
         />
         {badge && !hidden && (
           <span
             className={`pointer-events-none absolute h-2 w-2 rounded-full ring-2 ring-black/40 ${BADGE_CLASS[badge]}`}
-            style={{ left: SIZE / 2 + RADIUS * 0.62, top: SIZE / 2 - RADIUS * 0.9 }}
+            style={{ left: renderSize / 2 + renderRadius * 0.62, top: renderSize / 2 - renderRadius * 0.9 }}
           />
         )}
       </div>

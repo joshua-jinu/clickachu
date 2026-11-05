@@ -8,6 +8,7 @@ import {
   IPC_ORB_CLICK_THROUGH,
   IPC_ORB_DRAG,
   IPC_ORB_EXPANDED,
+  IPC_ORB_INTERFACE_EXPANDED,
   IPC_PANEL_HIDE,
   IPC_PICK_FOLDER,
   IPC_QUICKBAR_HEIGHT,
@@ -26,7 +27,14 @@ import type { MenuActions } from './menu'
 import { defaultCoreDir, defaultLogDir, Sidecar } from './sidecar'
 import { createTray, getAppMenu, showWindowsNotification, updateMenuState } from './tray'
 import { devRendererUrl } from './windows/common'
-import { createOrbWindow, orbDrag, orbWindow, setOrbClickThrough, setOrbExpanded } from './windows/orb'
+import {
+  createOrbWindow,
+  orbDrag,
+  orbWindow,
+  setOrbClickThrough,
+  setOrbExpanded,
+  setOrbInterfaceExpanded,
+} from './windows/orb'
 import {
   createPanelWindow,
   hidePanel,
@@ -221,6 +229,10 @@ ipcMain.on(
 ipcMain.on(
   IPC_ORB_EXPANDED,
   from(orbWindow, (_e, expanded) => setOrbExpanded(expanded === true)),
+)
+ipcMain.on(
+  IPC_ORB_INTERFACE_EXPANDED,
+  from(orbWindow, (_e, expanded) => setOrbInterfaceExpanded(expanded === true)),
 )
 ipcMain.on(
   IPC_ORB_DRAG,

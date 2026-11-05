@@ -29,11 +29,11 @@ const IDLE_FPS = 30
 const ACTIVE_FPS = 60
 const SHAKE_S = 0.5
 
-const COLOURS = ['#4f7cff', '#8b5cf6', '#e040fb'].map((c) => new Color(c))
-const CYAN = new Color('#3fe0ff')
-const VIOLET_GLOW = new Color('#a78bfa')
-const MAGENTA_GLOW = new Color('#e879f9')
-const RED = new Color('#ff3b5c')
+const COLOURS = ['#b7c6ca', '#76d9ef', '#ed5148'].map((c) => new Color(c))
+const CYAN = new Color('#76d9ef')
+const VIOLET_GLOW = new Color('#ed5148')
+const MAGENTA_GLOW = new Color('#b6eaf2')
+const RED = new Color('#ff554d')
 
 export type OrbVisualState = Exclude<OrbStateName, 'hidden'> | 'speaking' | 'typing'
 
@@ -285,6 +285,7 @@ export class OrbScene {
   private readonly sparkles: Points
   private readonly sphereMats: ShaderMaterial[]
   private readonly sparkleMat: ShaderMaterial
+  private readonly motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
 
   private readonly current: Params = { ...BASE }
   private target: Params = { ...BASE }
@@ -292,7 +293,8 @@ export class OrbScene {
   private targetShiftColour = CYAN
   private state: OrbVisualState = 'idle'
   private hovered = false
-  private level = 0.3
+  private level = 0
+  private targetLevel = 0
 
   private noiseTime = 0
   private breathPhase = 0
@@ -407,7 +409,7 @@ export class OrbScene {
 
   /** Mic RMS in [0, 1]; drives displacement while listening (voice lands in P5). */
   setLevel(rms: number): void {
-    this.level = Math.min(1, Math.max(0, rms))
+    this.targetLevel = Math.min(1, Math.max(0, rms))
   }
 
   start(): void {
@@ -452,7 +454,11 @@ export class OrbScene {
     if (!this.running) return
     this.raf = requestAnimationFrame(this.frame)
 
+    const reducedMotion = this.motionPreference.matches
     const active = this.state !== 'idle' || this.hovered || this.shakeLeft > 0 || !this.settled()
+    if (reducedMotion && this.state === 'idle' && !this.hovered && this.settled()) {
+      if (now - this.lastRender < 1000) return
+    }
     const fps = active ? ACTIVE_FPS : IDLE_FPS
     // Small tolerance so 60 Hz vsync doesn't alternate between 30 and 20 fps.
     if (now - this.lastRender < 1000 / fps - 4) return
@@ -470,22 +476,25 @@ export class OrbScene {
     const t = this.target
     const c = this.current
     for (const key of Object.keys(t) as (keyof Params)[]) c[key] += (t[key] - c[key]) * k
+    this.level += (this.targetLevel - this.level) * (1 - Math.exp(-dt / 0.085))
     this.shiftColour.lerp(this.targetShiftColour, k)
 
     const isAudioReactive = this.state === 'listening' || this.state === 'speaking'
     const voiceBoost = isAudioReactive ? this.level : 0
     this.elapsed += dt
-    this.noiseTime += dt * (c.noiseSpeed + voiceBoost * 0.95)
-    this.breathPhase += dt * Math.PI * 2 * c.breathHz
-    this.pulsePhase += dt * Math.PI * 2 * c.pulseHz
-    this.group.rotation.y += dt * (c.spin + voiceBoost * 0.45)
-    this.sparkles.rotation.y -= dt * c.spin * 0.25
+    const reducedMotion = this.motionPreference.matches
+    const motionScale = reducedMotion ? 0.18 : 1
+    this.noiseTime += dt * (c.noiseSpeed + voiceBoost * 0.95) * motionScale
+    this.breathPhase += dt * Math.PI * 2 * c.breathHz * motionScale
+    this.pulsePhase += dt * Math.PI * 2 * c.pulseHz * motionScale
+    this.group.rotation.y += dt * (c.spin + voiceBoost * 0.45) * motionScale
+    this.sparkles.rotation.y -= dt * c.spin * 0.25 * motionScale
 
     const pulse = Math.pow(0.5 + 0.5 * Math.sin(this.pulsePhase), 3)
     const scale =
       1 +
-      c.breathAmp * Math.sin(this.breathPhase) +
-      c.pulseAmp * pulse +
+      c.breathAmp * motionScale * Math.sin(this.breathPhase) +
+      c.pulseAmp * motionScale * pulse +
       voiceBoost * 0.14
     const amp = isAudioReactive ? c.amp * (0.35 + 1.85 * this.level) : c.amp
     const brightness = c.brightness * (this.hovered ? 1.15 : 1) + voiceBoost * 0.35
@@ -493,7 +502,8 @@ export class OrbScene {
     if (this.shakeLeft > 0) {
       this.shakeLeft = Math.max(0, this.shakeLeft - dt)
       const s = this.shakeLeft / SHAKE_S
-      this.group.position.x = Math.sin(this.elapsed * 70) * 0.08 * s
+      this.group.position.x =
+        Math.sin(this.elapsed * 70) * 0.08 * s * (reducedMotion ? 0 : 1)
     } else {
       this.group.position.x = 0
     }

@@ -1,4 +1,4 @@
-/** Result actions (§9.2.5): Copy · Replace selection · Insert · Open in panel. */
+/** Result actions (§9.2.5): Copy · Replace selection · Insert · Open in assistant. */
 import { CopyButton } from './CopyButton'
 
 const buttonClass =
@@ -13,7 +13,7 @@ interface ResultActionsProps {
   busy: boolean
   onReplace: () => void
   onInsert: () => void
-  onOpenInPanel: () => void
+  onOpenInAssistant: () => void
 }
 
 export function ResultActions({
@@ -23,7 +23,7 @@ export function ResultActions({
   busy,
   onReplace,
   onInsert,
-  onOpenInPanel,
+  onOpenInAssistant,
 }: ResultActionsProps) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -52,12 +52,12 @@ export function ResultActions({
       )}
       <button
         type="button"
-        onClick={onOpenInPanel}
+        onClick={onOpenInAssistant}
         disabled={busy}
-        title="Move this answer to the side panel"
+        title="Move this answer to the assistant workspace"
         className={buttonClass}
       >
-        Open in panel
+        Open in workspace
       </button>
     </div>
   )

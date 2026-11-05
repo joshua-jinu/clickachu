@@ -4,7 +4,7 @@
  * - Mic is ON by default when summoned from the Orb or Ctrl+Alt+V; the 3D Orb vibrates with the user's voice.
  * - Typing in the text box beneath the Orb automatically mutes the mic and calms the Orb so the user can focus on writing.
  * - Responses are split: conversational summaries are spoken aloud (vibrating the 3D Orb) and shown as clean captions,
- *   while any technical details (file paths, code blocks, diffs, tool steps) automatically open in the Side Panel on the right
+ *   while any technical details (file paths, code blocks, diffs, tool steps) automatically open in the assistant workspace
  *   while Clickachu continues talking.
  */
 import {
@@ -13,6 +13,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  type MutableRefObject,
   useRef,
   useState,
 } from 'react'
@@ -32,8 +33,8 @@ import { OrbScene, type OrbVisualState } from '../orb/orbScene'
 /** Window padding around the card so its glass shadow isn't clipped. */
 const WINDOW_PADDING = 12
 const DEFAULT_MAX_HEIGHT = 520
-const HERO_ORB_SIZE = 160
-const HERO_ORB_RADIUS = 40
+const HERO_ORB_SIZE = 132
+const HERO_ORB_RADIUS = 34
 
 interface Exchange {
   question: string
@@ -141,7 +142,13 @@ function SavedToast() {
   )
 }
 
-export function QuickBar() {
+export function QuickBar({
+  inline = false,
+  active = true,
+  onClose,
+  onListeningChange,
+  voiceSceneRef,
+}: { inline?: boolean; active?: boolean; onClose?: () => void; onListeningChange?: (listening: boolean) => void; voiceSceneRef?: MutableRefObject<OrbScene | null> }) {
   const connection = useStore((s) => s.connection)
   const connectionDetail = useStore((s) => s.connectionDetail)
   const runs = useStore((s) => s.runs)
@@ -172,8 +179,13 @@ export function QuickBar() {
 
   const shellRef = useRef<HTMLDivElement>(null)
   const promptRef = useRef<HTMLTextAreaElement>(null)
+  const inlinePromptRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<OrbScene | null>(null)
+
+  const focusPrompt = useCallback(() => {
+    ;(inline ? inlinePromptRef.current : promptRef.current)?.focus()
+  }, [inline])
 
   const last = exchanges.at(-1)
   const lastRun = last ? runs[last.runId] : undefined
@@ -207,14 +219,14 @@ export function QuickBar() {
     if (!canvas) return
     const scene = new OrbScene(canvas, HERO_ORB_SIZE, HERO_ORB_RADIUS)
     sceneRef.current = scene
-    scene.start()
+    if (active) scene.start()
 
     const handleContextLost = (e: Event) => e.preventDefault()
     const handleContextRestored = () => {
       sceneRef.current?.dispose()
       const next = new OrbScene(canvas, HERO_ORB_SIZE, HERO_ORB_RADIUS)
       sceneRef.current = next
-      next.start()
+      if (active) next.start()
     }
     canvas.addEventListener('webglcontextlost', handleContextLost, false)
     canvas.addEventListener('webglcontextrestored', handleContextRestored, false)
@@ -224,7 +236,12 @@ export function QuickBar() {
       scene.dispose()
       sceneRef.current = null
     }
-  }, [])
+  }, [active])
+
+  useEffect(() => {
+    if (active) sceneRef.current?.start()
+    else sceneRef.current?.stop()
+  }, [active])
 
   useEffect(() => {
     sceneRef.current?.setState(heroOrbState)
@@ -253,6 +270,7 @@ export function QuickBar() {
   // Local Web Audio API microphone analyser fallback for ultra-smooth 60fps vibration while listening
   useEffect(() => {
     if (!isListening) return
+    const orbScene = voiceSceneRef?.current ?? null
     let cancelled = false
     let audioCtx: AudioContext | null = null
     let mediaStream: MediaStream | null = null
@@ -283,6 +301,7 @@ export function QuickBar() {
           }
           const rms = Math.sqrt(sum / data.length)
           sceneRef.current?.setLevel(Math.min(1, rms * 4.8))
+          orbScene?.setLevel(Math.min(1, rms * 4.8))
           raf = requestAnimationFrame(tick)
         }
         raf = requestAnimationFrame(tick)
@@ -296,17 +315,20 @@ export function QuickBar() {
       cancelAnimationFrame(raf)
       mediaStream?.getTracks().forEach((t) => t.stop())
       void audioCtx?.close().catch(() => {})
+      orbScene?.setLevel(0)
     }
-  }, [isListening])
+  }, [isListening, voiceSceneRef])
 
   // Keep main informed so it doesn't hide the HUD on blur while listening, running, or speaking.
   const keepOpen = running || isListening || isSpeaking
   useEffect(() => {
+    if (inline) return
     window.clickachu.setQuickBarRunActive(keepOpen)
-  }, [keepOpen])
+  }, [inline, keepOpen])
 
   // Report the card's natural height whenever it changes.
   useLayoutEffect(() => {
+    if (inline) return
     const el = shellRef.current
     if (!el) return
     const report = () => window.clickachu.reportQuickBarHeight(el.offsetHeight)
@@ -314,7 +336,7 @@ export function QuickBar() {
     ro.observe(el)
     report()
     return () => ro.disconnect()
-  }, [])
+  }, [inline])
 
   const runningRef = useRef(running)
   const exchangesRef = useRef(exchanges)
@@ -330,23 +352,28 @@ export function QuickBar() {
     speechEngine.stop()
     ignoreNextTranscriptRef.current = false
     setIsListening(true)
+    onListeningChange?.(true)
     setNotice('')
     try {
       const res = await api.startVoice()
       if (!res.ok) {
         setIsListening(false)
+        onListeningChange?.(false)
         setNotice('Microphone unavailable — type below instead.')
       }
     } catch {
       setIsListening(false)
+      onListeningChange?.(false)
     }
-  }, [])
+  }, [onListeningChange])
 
+  const inlineMicStarted = useRef(false)
   const stopMic = useCallback(async (discardTranscript = false) => {
     if (discardTranscript) {
       ignoreNextTranscriptRef.current = true
     }
     setIsListening(false)
+    onListeningChange?.(false)
     try {
       const res = await api.stopVoice()
       if (!discardTranscript && res.text?.trim()) {
@@ -355,7 +382,19 @@ export function QuickBar() {
     } catch {
       // ignore
     }
-  }, [])
+  }, [onListeningChange])
+
+  useEffect(() => {
+    if (!inline) return
+    if (active && !inlineMicStarted.current) {
+      inlineMicStarted.current = true
+      void startMic()
+      requestAnimationFrame(focusPrompt)
+    } else if (!active && inlineMicStarted.current) {
+      inlineMicStarted.current = false
+      if (isListening) queueMicrotask(() => void stopMic(false))
+    }
+  }, [inline, active, isListening, startMic, stopMic, focusPrompt])
 
   const toggleMic = useCallback(() => {
     if (isListening) {
@@ -365,18 +404,19 @@ export function QuickBar() {
     }
   }, [isListening, startMic, stopMic])
 
-  // Automatically open Side Panel when a run is in agent mode OR streams technical details
+  // Automatically open the assistant workspace when a run is in agent mode OR streams technical details
   // while keeping the 3D Orb HUD open so Clickachu can continue speaking to the user!
   useEffect(() => {
     if (!last || !lastRun) return
-    const needsPanel =
+    const needsAssistant =
       lastRun.mode === 'agent' ||
       lastRun.steps.length > 0 ||
       ( Boolean(lastRun.text) && split.hasTechnicalDetails )
 
-    if (needsPanel && !handedOffSetRef.current.has(last.runId)) {
+    if (needsAssistant && !handedOffSetRef.current.has(last.runId)) {
       handedOffSetRef.current.add(last.runId)
       setHandedOffRunId(last.runId)
+      if (inline) onClose?.()
       window.clickachu.openPanelInChat({
         runId: last.runId,
         question: last.question,
@@ -387,7 +427,7 @@ export function QuickBar() {
         keepHudOpen: true,
       })
     }
-  }, [last, lastRun, split.hasTechnicalDetails])
+  }, [inline, onClose, last, lastRun, split.hasTechnicalDetails])
 
   // When a run finishes (or closes its <voice> tag), speak the conversational summary aloud!
   useEffect(() => {
@@ -404,8 +444,9 @@ export function QuickBar() {
 
   // Each time the HUD is shown: reset if idle, start mic if requested, and focus the input.
   useEffect(
-    () =>
-      window.clickachu.onQuickBarShown(
+    () => {
+      if (inline) return
+      return window.clickachu.onQuickBarShown(
         ({ maxHeight: mh, context: captured, initialAction, isListening: listening }) => {
           setMaxHeight(mh)
           if (!runningRef.current) {
@@ -430,18 +471,21 @@ export function QuickBar() {
               } else {
                 setIsListening(false)
               }
-              requestAnimationFrame(() => promptRef.current?.focus())
+              requestAnimationFrame(focusPrompt)
             }
           } else {
             if (listening) void startMic()
-            requestAnimationFrame(() => promptRef.current?.focus())
+            requestAnimationFrame(focusPrompt)
           }
         },
-      ),
-    [startMic],
+      )
+    },
+    [inline, startMic, focusPrompt],
   )
 
-  useEffect(() => promptRef.current?.focus(), [])
+  useEffect(() => {
+    if (!inline) promptRef.current?.focus()
+  }, [inline])
 
   const contextId = context && !selectionDropped ? context.id : undefined
   const hasSelection = Boolean(context?.selection) && !selectionDropped
@@ -485,10 +529,11 @@ export function QuickBar() {
       setNotice('')
       setExchanges((xs) => (append ? [...xs, { question, runId }] : [{ question, runId }]))
 
-      // If explicitly an agent / fix / do task, immediately slide open the Side Panel while keeping the Orb HUD alive
+      // If explicitly an agent / fix / do task, open the assistant workspace while keeping the Orb HUD alive
       if (mode === 'agent' || action === 'do' || action === 'fix') {
         handedOffSetRef.current.add(runId)
         setHandedOffRunId(runId)
+        if (inline) onClose?.()
         window.clickachu.openPanelInChat({
           runId,
           question,
@@ -500,7 +545,7 @@ export function QuickBar() {
       }
       return true
     },
-    [contextId],
+    [contextId, inline, onClose],
   )
 
   function runAction(action: RunAction, explicitContextId?: string | null) {
@@ -513,7 +558,7 @@ export function QuickBar() {
         }
       } else {
         setDoMode((v) => !v)
-        promptRef.current?.focus()
+        focusPrompt()
       }
       return
     }
@@ -583,7 +628,7 @@ export function QuickBar() {
     const text = runs[exchangesRef.current.at(-1)?.runId ?? '']?.text ?? ''
     if (!context || !text || applying) return
     setApplying(true)
-    window.clickachu.setQuickBarRunActive(true)
+    if (!inline) window.clickachu.setQuickBarRunActive(true)
     try {
       const res = await api.replaceContext({
         context_id: context.id,
@@ -592,8 +637,11 @@ export function QuickBar() {
       })
       if (res.ok) {
         speechEngine.stop()
-        window.clickachu.setQuickBarRunActive(false)
-        window.clickachu.hideQuickBar()
+        if (inline) onClose?.()
+        else {
+          window.clickachu.setQuickBarRunActive(false)
+          window.clickachu.hideQuickBar()
+        }
         return
       }
       if (res.reason === 'focus') {
@@ -606,15 +654,16 @@ export function QuickBar() {
       setNotice('Could not reach target window. Use Copy instead.')
     } finally {
       setApplying(false)
-      window.clickachu.setQuickBarRunActive(runningRef.current)
+      if (!inline) window.clickachu.setQuickBarRunActive(runningRef.current)
     }
   }
   useLayoutEffect(() => {
     applyRef.current = (mode) => void applyResult(mode)
   })
 
-  function openInPanel() {
+  function openInAssistant() {
     if (!last) return
+    if (inline) onClose?.()
     window.clickachu.openPanelInChat({
       runId: last.runId,
       question: last.question,
@@ -662,13 +711,20 @@ export function QuickBar() {
 
   const closeHud = useCallback(() => {
     cancel()
-    if (isListening) void stopMic(true)
-    window.clickachu.setQuickBarRunActive(false)
-    window.clickachu.hideQuickBar()
-  }, [cancel, isListening, stopMic])
+    if (isListening) {
+      inlineMicStarted.current = false
+      void stopMic(true)
+    }
+    if (inline) onClose?.()
+    else {
+      window.clickachu.setQuickBarRunActive(false)
+      window.clickachu.hideQuickBar()
+    }
+  }, [cancel, inline, isListening, onClose, stopMic])
 
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
+      if (!active) return
       if (e.key === 'Enter' && e.ctrlKey && !e.isComposing) {
         e.preventDefault()
         if (canReplaceRef.current) applyRef.current('replace')
@@ -680,7 +736,16 @@ export function QuickBar() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeHud])
+  }, [closeHud, active])
+
+  const openWorkspace = useCallback(() => {
+    if (inline && isListening) {
+      inlineMicStarted.current = false
+      void stopMic(false)
+    }
+    if (inline) onClose?.()
+    window.clickachu.openPanelInChat()
+  }, [inline, isListening, onClose, stopMic])
 
   const canReplace = hasSelection && !context?.is_terminal
   const canInsert = Boolean(context?.hwnd)
@@ -708,17 +773,19 @@ export function QuickBar() {
             : lastRun?.activity || 'Generating response…'
         : prompt.trim().length > 0
           ? 'Focused on text · Press Enter to send'
-          : 'Click orb to speak, or type below'
+          : inline
+            ? 'Ready · speak or type below'
+            : 'Click orb to speak, or type below'
 
   const showConversationalCaption =
     Boolean(last) && (Boolean(split.voiceSummary) || lastRun?.status === 'error')
   const isHandedOff = Boolean(last && handedOffRunId === last.runId)
 
   return (
-    <div ref={shellRef} style={{ padding: WINDOW_PADDING }}>
+    <div ref={shellRef} className={inline ? 'ck-orb-voice-layer' : undefined} style={inline ? undefined : { padding: WINDOW_PADDING, display: active ? undefined : 'none' }}>
       <div
-        className="ck-glass relative flex flex-col items-center gap-3 overflow-hidden rounded-3xl px-5 pt-3.5 pb-4"
-        style={{ maxHeight: maxHeight - WINDOW_PADDING * 2 }}
+        className={`ck-glass relative flex ${inline ? 'ck-orb-composer-card flex-col justify-center gap-2.5' : 'flex-col items-center gap-3'} overflow-hidden rounded-3xl px-5 pt-3.5 pb-4`}
+        style={inline ? undefined : { maxHeight: maxHeight - WINDOW_PADDING * 2 }}
       >
         {connection !== 'connected' && (
           <ReconnectingBanner
@@ -769,7 +836,7 @@ export function QuickBar() {
               title="Open Side Panel with this selection (Ctrl+Alt+P toggles panel)"
               className="flex h-7 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-ck-muted transition-colors hover:border-white/20 hover:text-ck-text"
             >
-              <span>Panel</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M6 8h5M6 12h5M6 16h5"/></svg>
             </button>
             <button
               type="button"
@@ -789,8 +856,8 @@ export function QuickBar() {
           </div>
         )}
 
-        {/* Center Hero 3D Reactive Orb Stage */}
-        <div className="relative flex flex-col items-center justify-center py-0.5">
+        {/* Standalone Quick Bar retains its hero orb; inline mode uses the actual orb renderer beside this composer. */}
+        {!inline && <div className="relative flex flex-col items-center justify-center py-0.5">
           <button
             type="button"
             onClick={toggleMic}
@@ -834,7 +901,14 @@ export function QuickBar() {
             <span className="font-medium tracking-tight">{statusLabel}</span>
             {last && <RunTimer runId={last.runId} />}
           </div>
-        </div>
+        </div>}
+
+        {inline && (
+          <div className="ck-inline-voice-state" aria-live="polite">
+            <span className={`ck-inline-voice-led ${isListening ? 'is-listening' : running ? 'is-working' : isSpeaking ? 'is-speaking' : ''}`} />
+            <span>{statusLabel}</span>
+          </div>
+        )}
 
         {/* Conversational Voice Response Subtitle Card */}
         {lastRun && <RunDetails run={lastRun} />}
@@ -860,15 +934,15 @@ export function QuickBar() {
               <p className="text-sm leading-relaxed text-ck-text">{split.voiceSummary}</p>
             )}
 
-            {/* Handoff notice when technical details / paths / code are shown in the Side Panel */}
+            {/* Handoff notice when technical details / paths / code are shown in the assistant workspace */}
             {(isHandedOff || split.hasTechnicalDetails) && (
               <div className="flex items-center justify-center pt-0.5">
                 <button
                   type="button"
-                  onClick={openInPanel}
+                  onClick={openInAssistant}
                   className="inline-flex items-center gap-1.5 rounded-full border border-ck-violet/35 bg-ck-violet/15 px-3 py-0.5 text-[11px] font-medium text-violet-200 transition-colors hover:bg-ck-violet/25"
                 >
-                  <span>✨ Technical details &amp; paths opened in Side Panel →</span>
+                  <span>Technical details opened in workspace →</span>
                 </button>
               </div>
             )}
@@ -882,7 +956,7 @@ export function QuickBar() {
                   busy={applying}
                   onReplace={() => void applyResult('replace')}
                   onInsert={() => void applyResult('insert')}
-                  onOpenInPanel={openInPanel}
+                  onOpenInAssistant={openInAssistant}
                 />
               </div>
             )}
@@ -900,13 +974,13 @@ export function QuickBar() {
         <SavedToast />
 
         {/* Sleek ChatGPT / Gemini / Claude Style Unified Input Pill */}
-        <div className="ck-input-pill flex w-full shrink-0 items-end gap-2 rounded-2xl px-3 py-2">
+        <div className={`ck-input-pill flex shrink-0 gap-2 rounded-2xl px-3 ${inline ? 'ck-compact-chat-input ck-inline-chat-bar w-full' : 'w-full items-end py-2'}`}>
           {/* Mic Button */}
           <button
             type="button"
             onClick={toggleMic}
             title={isListening ? 'Microphone is ON (click to mute)' : 'Turn microphone ON'}
-            className={`mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all ${
+            className={`${inline ? 'mb-0' : 'mb-0.5'} flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all ${
               isListening
                 ? 'bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-400/50 shadow-[0_0_12px_rgba(63,224,255,0.3)]'
                 : 'bg-white/[0.06] text-ck-muted hover:bg-white/10 hover:text-ck-text'
@@ -946,25 +1020,47 @@ export function QuickBar() {
             </span>
           )}
 
-          {/* Textarea */}
-          <div className="min-w-0 flex-1 py-0.5">
-            <AutoTextarea
-              inputRef={promptRef}
-              value={prompt}
-              onFocus={() => setIsTypingFocus(true)}
-              onBlur={() => setIsTypingFocus(false)}
-              onChange={onPromptChange}
-              onSubmit={sendPrompt}
-              placeholder={
-                isListening
-                  ? 'Speak now, or start typing to write…'
-                  : doMode
-                    ? 'Describe a task to carry out…'
-                    : exchanges.length > 0
-                      ? 'Ask a follow-up, or click mic to speak…'
-                      : 'Message Clickachu…'
-              }
-            />
+          {/* Inline mode is a single-row input; the standalone Quick Bar keeps its multiline composer. */}
+          <div className="flex min-w-0 flex-1 items-center py-0.5">
+            {inline ? (
+              <input
+                ref={inlinePromptRef}
+                type="text"
+                value={prompt}
+                onFocus={() => setIsTypingFocus(true)}
+                onBlur={() => setIsTypingFocus(false)}
+                onChange={(e) => onPromptChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    sendPrompt()
+                  }
+                }}
+                placeholder="Speak now, or start typing..."
+                aria-label="Message Clickachu"
+                autoComplete="off"
+                spellCheck={false}
+                className="ck-inline-chat-text h-8 bg-transparent text-sm leading-5 text-ck-text outline-none placeholder:text-ck-muted/75"
+              />
+            ) : (
+              <AutoTextarea
+                inputRef={promptRef}
+                value={prompt}
+                onFocus={() => setIsTypingFocus(true)}
+                onBlur={() => setIsTypingFocus(false)}
+                onChange={onPromptChange}
+                onSubmit={sendPrompt}
+                placeholder={
+                  isListening
+                    ? 'Speak now, or start typing to write…'
+                    : doMode
+                      ? 'Describe a task to carry out…'
+                      : exchanges.length > 0
+                        ? 'Ask a follow-up, or click mic to speak…'
+                        : 'Message Clickachu…'
+                }
+              />
+            )}
           </div>
 
           {/* Send or Stop Button */}
@@ -973,7 +1069,7 @@ export function QuickBar() {
               type="button"
               onClick={cancel}
               title="Stop current run"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-300 ring-1 ring-red-400/40 transition-colors hover:bg-red-500/30"
+              className={`${inline ? 'mb-0' : 'mb-0.5'} flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-300 ring-1 ring-red-400/40 transition-colors hover:bg-red-500/30`}
             >
               <span className="h-2.5 w-2.5 rounded-xs bg-current" />
             </button>
@@ -983,7 +1079,7 @@ export function QuickBar() {
               onClick={sendPrompt}
               disabled={!prompt.trim()}
               title="Send (Enter)"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ck-violet text-white transition-all hover:bg-ck-violet/90 disabled:bg-white/[0.06] disabled:text-ck-muted/40"
+              className={`${inline ? 'mb-0' : 'mb-0.5'} flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ck-violet text-white transition-all hover:bg-ck-violet/90 disabled:bg-white/[0.06] disabled:text-ck-muted/40`}
             >
               <svg
                 viewBox="0 0 24 24"

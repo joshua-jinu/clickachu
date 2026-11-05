@@ -12,7 +12,7 @@ import { panelWindow } from './panel'
 const WIDTH = 500
 const MIN_HEIGHT = 240
 const MAX_HEIGHT_FRACTION = 0.68
-const PANEL_WIDTH_RESERVE = 416
+const PANEL_WIDTH_RESERVE = 480
 
 let win: BrowserWindow | null = null
 let contentHeight = MIN_HEIGHT
@@ -72,7 +72,8 @@ function clamp(v: number, lo: number, hi: number): number {
 /** Center-stage HUD placement; shifts left if the Side Panel is visible so they never overlap. */
 function boundsCenteredHud(area: Rectangle, height: number): Rectangle {
   const panelOpen = Boolean(panelWindow()?.isVisible())
-  const availableWidth = panelOpen ? Math.max(WIDTH, area.width - PANEL_WIDTH_RESERVE) : area.width
+  const reserve = panelWindow()?.getBounds().width ?? PANEL_WIDTH_RESERVE
+  const availableWidth = panelOpen ? Math.max(WIDTH, area.width - reserve) : area.width
   const centeredX = area.x + Math.round((availableWidth - WIDTH) / 2)
   const x = clamp(centeredX, area.x + 16, area.x + area.width - WIDTH - 16)
   const targetY = area.y + Math.round(area.height * 0.52 - height / 2)
@@ -83,10 +84,11 @@ function boundsCenteredHud(area: Rectangle, height: number): Rectangle {
 export function nudgeQuickBarForPanel(): void {
   if (!win || !win.isVisible() || !workArea) return
   const b = win.getBounds()
-  const maxRight = workArea.x + workArea.width - PANEL_WIDTH_RESERVE
+  const reserve = panelWindow()?.getBounds().width ?? PANEL_WIDTH_RESERVE
+  const maxRight = workArea.x + workArea.width - reserve
   if (b.x + b.width > maxRight) {
     const nextX = clamp(
-      workArea.x + Math.round((workArea.width - PANEL_WIDTH_RESERVE - WIDTH) / 2),
+      workArea.x + Math.round((workArea.width - reserve - WIDTH) / 2),
       workArea.x + 16,
       maxRight - WIDTH,
     )

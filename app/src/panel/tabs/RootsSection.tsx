@@ -9,12 +9,13 @@ export function RootsSection({ revision }: { revision: number }) {
   const connection = useStore((s) => s.connection)
   const [roots, setRoots] = useState<AllowedRoot[]>([])
   const [note, setNote] = useState('')
+  const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(() => {
     api
       .listRoots()
-      .then(setRoots)
-      .catch((err: unknown) => setNote(errorText(err)))
+      .then((rows) => { setRoots(rows); setLoaded(true) })
+      .catch((err: unknown) => { setNote(errorText(err)); setLoaded(true) })
   }, [])
 
   useEffect(() => {
@@ -45,8 +46,8 @@ export function RootsSection({ revision }: { revision: number }) {
         </button>
       </div>
       {roots.length === 0 && (
-        <p className="text-xs text-ck-muted">
-          The agent can't read or write files anywhere until you add a folder.
+        <p className={loaded ? 'ck-empty-state ck-empty-inline' : 'ck-inline-state'}>
+          {loaded ? "The agent can't read or write files anywhere until you add a folder." : 'Loading allowed folders…'}
         </p>
       )}
       <ul className="space-y-1.5">

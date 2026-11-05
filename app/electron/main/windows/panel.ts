@@ -1,19 +1,34 @@
 /**
- * Side panel window (PLAN §9.3): 380 px wide, work-area tall, docked to the right edge of the
- * display the cursor is on, frameless. The slide-in itself is a CSS transition in the renderer,
- * re-triggered by IPC_PANEL_SHOWN each time the window is shown.
+ * Full-height, right-docked assistant sidebar. Close hides it so orb and Quick Bar handoffs can
+ * reopen the same renderer and in-memory conversation state.
  */
-import { app, BrowserWindow, dialog, screen } from 'electron'
+import { app, BrowserWindow, dialog, screen, type Rectangle } from 'electron'
 import {
   IPC_OPEN_SETTINGS,
   IPC_PANEL_HANDOFF,
   IPC_PANEL_SHOWN,
   type PanelHandoff,
 } from '../../../src/shared/bridge'
+import { prefs } from '../store'
 import { loadPage, secureWebPreferences } from './common'
-import { nudgeQuickBarForPanel } from './quickbar'
+import { positionOrbForWorkspace, restoreOrbAfterWorkspace } from './orb'
 
-const WIDTH = 400
+const MIN_HEIGHT = 420
+
+function dockWidth(workAreaWidth: number): number {
+  return Math.max(1, Math.min(workAreaWidth, 440, Math.max(180, workAreaWidth - 144)))
+}
+
+function sidebarBounds(): Rectangle {
+  const { workArea } = screen.getPrimaryDisplay()
+  const width = dockWidth(workArea.width)
+  return {
+    x: workArea.x + workArea.width - width,
+    y: workArea.y,
+    width,
+    height: workArea.height,
+  }
+}
 
 let win: BrowserWindow | null = null
 let quitting = false
@@ -26,28 +41,38 @@ export function panelWindow(): BrowserWindow | null {
 }
 
 export function createPanelWindow(): BrowserWindow {
+  const bounds = sidebarBounds()
   win = new BrowserWindow({
-    width: WIDTH,
-    height: 720,
+    ...bounds,
     show: false,
     frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    backgroundColor: '#080a0d',
     hasShadow: false,
+    minWidth: Math.min(180, bounds.width),
+    minHeight: Math.min(MIN_HEIGHT, bounds.height),
     resizable: false,
+    movable: false,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
-    skipTaskbar: true,
-    title: 'Clickachu',
+    skipTaskbar: false,
+    autoHideMenuBar: true,
+    title: 'Clickachu — Assistant',
     webPreferences: secureWebPreferences(),
   })
-  win.setAlwaysOnTop(true, 'floating')
+  const saveBounds = (): void => {
+    if (!win || win.isMaximized() || win.isMinimized()) return
+    const b = win.getBounds()
+    prefs.set('assistantBounds', { x: b.x, y: b.y, width: b.width, height: b.height })
+    if (win.isVisible()) positionOrbForWorkspace(b)
+  }
+  win.on('resize', saveBounds)
+  win.on('move', saveBounds)
   win.on('close', (e) => {
     if (quitting) return
     e.preventDefault()
-    win?.hide()
+    hidePanel()
   })
   win.on('closed', () => {
     win = null
@@ -59,15 +84,19 @@ export function createPanelWindow(): BrowserWindow {
 export function showPanel(takeFocus = true): void {
   if (!win) createPanelWindow()
   if (!win) return
-  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
-  win.setBounds({ x: area.x + area.width - WIDTH, y: area.y, width: WIDTH, height: area.height })
+  const bounds = sidebarBounds()
+  // Reassert native geometry on every open; hidden windows can retain stale bounds across
+  // display/work-area changes. Restore first so minimized/maximized state cannot override it.
+  if (win.isMinimized()) win.restore()
+  if (win.isMaximized()) win.unmaximize()
+  win.setBounds(bounds)
+  positionOrbForWorkspace(bounds)
   if (takeFocus) {
     win.show()
     win.focus()
   } else {
     win.showInactive()
   }
-  nudgeQuickBarForPanel()
   win.webContents.send(IPC_PANEL_SHOWN)
 }
 
@@ -96,7 +125,10 @@ export function openPanelInSettings(): void {
 }
 
 export function hidePanel(): void {
-  if (win?.isVisible()) win.hide()
+  if (win?.isVisible()) {
+    win.hide()
+    restoreOrbAfterWorkspace()
+  }
 }
 
 export function togglePanel(): void {

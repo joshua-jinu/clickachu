@@ -175,12 +175,13 @@ export function ProjectsSection({ onRootsChanged }: { onRootsChanged: () => void
   const [draft, setDraft] = useState<Draft | null>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(() => {
     api
       .listProjects()
-      .then(setProjects)
-      .catch((err: unknown) => setNote(errorText(err)))
+      .then((rows) => { setProjects(rows); setLoaded(true) })
+      .catch((err: unknown) => { setNote(errorText(err)); setLoaded(true) })
   }, [])
 
   useEffect(() => {
@@ -247,8 +248,10 @@ export function ProjectsSection({ onRootsChanged }: { onRootsChanged: () => void
         </button>
       </div>
       {projects.length === 0 && !draft && (
-        <p className="text-xs text-ck-muted">
-          Add a folder and Clickachu proposes its dev commands (package.json, compose, Makefile…).
+        <p className={loaded ? 'ck-empty-state ck-empty-inline' : 'ck-inline-state'}>
+          {!loaded
+            ? 'Loading project profiles…'
+            : 'Add a folder and Clickachu proposes its dev commands (package.json, compose, Makefile…).'}
         </p>
       )}
       <ul className="space-y-1.5">

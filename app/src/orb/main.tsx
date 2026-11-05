@@ -3,13 +3,13 @@ import { createRoot } from 'react-dom/client'
 import '@shared/theme.css'
 import { bindStore } from '@shared/store'
 import { ws } from '@shared/ws'
-import { Orb } from './Orb'
+import { OrbExperience } from './OrbExperience'
 
 bindStore(ws)
 ws.start()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Orb />
+    <OrbExperience />
   </StrictMode>,
 )

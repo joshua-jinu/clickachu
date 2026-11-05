@@ -204,15 +204,21 @@ export function ChatTab() {
       {/* Conversation & Technical Details Stream */}
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
         {history.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.03] text-base">
-              ✨
+          <div className="ck-empty-state">
+            <div className="ck-empty-reticle">
+              <span />
             </div>
-            <p className="text-xs font-medium text-ck-text/90">Technical Details &amp; Workspace</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-ck-muted">
-              Code blocks, file paths, diffs, and tool approvals appear here automatically while
-              Clickachu speaks to you.
+            <p className="ck-empty-kicker">COMMAND INTERFACE READY</p>
+            <p className="ck-empty-title">What should we work on?</p>
+            <p className="ck-empty-copy">
+              Ask a question, bring in desktop context, or describe an action. Clickachu will show
+              its work and ask before it acts.
             </p>
+            <div className="ck-empty-shortcuts">
+              <span>ENTER TO SEND</span>
+              <i />
+              <span>SHIFT + ENTER FOR NEW LINE</span>
+            </div>
           </div>
         ) : (
           history.map((id) => <ChatTurn key={id} runId={id} />)
