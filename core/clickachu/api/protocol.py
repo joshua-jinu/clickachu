@@ -6,7 +6,9 @@ Mirrored by `app/src/shared/protocol.ts` — same names, change both together.
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
+
+from clickachu.llm.ollama_connection import normalize_endpoint
 
 RunAction = Literal["summarise", "explain", "translate", "rewrite", "fix", "ask", "do"]
 RunMode = Literal["ask", "agent"]
@@ -72,6 +74,15 @@ class OllamaStatusResponse(BaseModel):
     error: str | None = None
 
 
+class OllamaConnectionProfile(BaseModel):
+    base_url: str
+    model: str = DEFAULT_OLLAMA_MODEL
+    summary_model: str = ""
+    cpu_only: bool = False
+
+    _normalize_url = field_validator("base_url")(normalize_endpoint)
+
+
 class Settings(BaseModel):
     """Model configuration (PLAN §5). Empty model IDs mean "not configured yet".
 
@@ -93,6 +104,8 @@ class Settings(BaseModel):
     # Fast tier (Ollama); empty means "use the thinking model".
     ollama_summary_model: str = ""
     ollama_cpu_only: bool = False
+    ollama_local_profile: OllamaConnectionProfile | None = None
+    ollama_remote_profile: OllamaConnectionProfile | None = None
     translate_language: str = "English"
     # Logs every outgoing prompt (after redaction) so redaction can be verified (§10).
     debug_log_prompts: bool = False
@@ -158,6 +171,7 @@ class Settings(BaseModel):
 class SettingsView(Settings):
     has_openrouter_key: bool = False
     voice_model_status: str = "unloaded"
+    ollama_environment_warning: str | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -166,7 +180,9 @@ class SettingsUpdate(BaseModel):
     ask_model: str | None = None
     agent_model: str | None = None
     base_url: str | None = Field(default=None, pattern=r"^https?://")
-    ollama_base_url: str | None = Field(default=None, pattern=r"^https?://")
+    ollama_base_url: str | None = None
+    ollama_local_profile: OllamaConnectionProfile | None = None
+    ollama_remote_profile: OllamaConnectionProfile | None = None
     ollama_model: str | None = None
     ollama_summary_model: str | None = None
     ollama_cpu_only: bool | None = None
@@ -189,6 +205,11 @@ class SettingsUpdate(BaseModel):
     proactive_suggestions: bool | None = None
     voice_enabled: bool | None = None
     voice_device: str | None = None
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def normalize_ollama_url(cls, value: str | None) -> str | None:
+        return normalize_endpoint(value) if value is not None else None
 
 
 class VoiceStopResponse(BaseModel):

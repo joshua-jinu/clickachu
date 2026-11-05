@@ -72,7 +72,8 @@ function query(params: Record<string, string | boolean | undefined>): string {
 
 export const api = {
   getSettings: () => request<SettingsView>('GET', '/settings'),
-  getOllamaStatus: () => request<OllamaStatusResponse>('GET', '/ollama/status'),
+  getOllamaStatus: (baseUrl?: string) =>
+    request<OllamaStatusResponse>('GET', `/ollama/status${query({ base_url: baseUrl })}`),
   putSettings: (patch: SettingsUpdate) => request<SettingsView>('PUT', '/settings', patch),
   openBrowser: () => request<{ ok: boolean }>('POST', '/browser/open'),
   replaceContext: (body: ReplaceRequest) =>

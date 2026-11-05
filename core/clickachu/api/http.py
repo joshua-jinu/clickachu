@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from keyring.errors import KeyringError
 
 from clickachu import __version__
@@ -44,6 +44,7 @@ from clickachu.automation.browser_worker import (
 from clickachu.automation.com_worker import run_com, shutdown_com_worker
 from clickachu.config import get_paths
 from clickachu.context.capture import ContextService, ContextStore
+from clickachu.llm.ollama_connection import clear_client_host, is_local_endpoint, normalize_endpoint
 from clickachu.llm.provider import LLMProvider
 from clickachu.memory.service import MemoryService
 from clickachu.memory.store import MemoryStore
@@ -70,7 +71,7 @@ class AppConfig:
     ws_auth_timeout_s: float = 2.0
 
 
-_provider_cache: dict[tuple[str, str, str, bool, str], LLMProvider] = {}
+_provider_cache: dict[tuple[str, str, str, bool, str, str], LLMProvider] = {}
 
 
 def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
@@ -85,6 +86,7 @@ def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
         settings.reasoning_effort,
         settings.ollama_cpu_only,
         settings.active_fast_model,
+        settings.provider,
     )
     cached = _provider_cache.get(cache_key)
     if cached is not None:
@@ -95,6 +97,7 @@ def openrouter_factory(settings: Settings, api_key: str) -> LLMProvider:
         reasoning_effort=settings.reasoning_effort,
         ollama_cpu_only=settings.ollama_cpu_only,
         summary_model=settings.active_fast_model,
+        is_ollama=settings.provider == "ollama",
     )
     _provider_cache[cache_key] = prov
     return prov
@@ -264,9 +267,12 @@ def create_app(
         return VoiceStopResponse(text=text)
 
     @app.get("/ollama/status")
-    async def get_ollama_status() -> OllamaStatusResponse:
+    async def get_ollama_status(base_url: str | None = Query(default=None)) -> OllamaStatusResponse:
         s = settings.get()
-        base = s.ollama_base_url.rstrip("/")
+        try:
+            base = normalize_endpoint(base_url if base_url is not None else s.ollama_base_url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         if base.endswith("/v1"):
             base = base[:-3]
         tags_url = f"{base}/api/tags"
@@ -279,7 +285,7 @@ def create_app(
                 import urllib.request
 
                 req = urllib.request.Request(tags_url, headers={"User-Agent": "Clickachu"})
-                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
                     if resp.status == 200:
                         data = json.loads(resp.read().decode("utf-8"))
                         raw_models = data.get("models", [])
@@ -305,7 +311,17 @@ def create_app(
 
     @app.put("/settings")
     async def put_settings(patch: SettingsUpdate) -> SettingsView:
-        return _view(settings.update(patch), secrets, vc_service.model_status)
+        saved = settings.update(patch)
+        warning = None
+        if (
+            saved.provider == "ollama"
+            and patch.ollama_base_url is not None
+            and is_local_endpoint(saved.ollama_base_url)
+        ):
+            warning = clear_client_host()
+        view = _view(saved, secrets, vc_service.model_status)
+        view.ollama_environment_warning = warning
+        return view
 
     @app.put("/secrets/openrouter", status_code=204)
     @app.put("/secrets/gemini", status_code=204)

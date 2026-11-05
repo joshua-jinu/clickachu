@@ -12,6 +12,42 @@ def reset_cache(monkeypatch):
     monkeypatch.setattr(web, "_CACHE", {})
 
 
+def test_recent_lookup_uses_news_and_does_not_reuse_general_search_cache(monkeypatch):
+    from ddgs import DDGS
+    from ddgs.engines import ENGINES
+
+    calls = []
+    monkeypatch.setitem(ENGINES, "text", {"duckduckgo": object})
+    monkeypatch.setitem(ENGINES, "news", {"duckduckgo": object})
+
+    def text(self, query, **kwargs):
+        calls.append(("text", kwargs))
+        return [
+            {"title": "Company overview", "href": "https://example.com/about", "body": "Overview"}
+        ]
+
+    def news(self, query, **kwargs):
+        calls.append(("news", kwargs))
+        return [
+            {
+                "title": "New development",
+                "url": "https://example.com/news",
+                "body": "News",
+                "date": "2026-11-05",
+            }
+        ]
+
+    monkeypatch.setattr(DDGS, "text", text)
+    monkeypatch.setattr(DDGS, "news", news)
+    general = web.search_web("Microsoft")
+    recent = web.search_web("Microsoft", recent=True)
+    assert general[0]["title"] == "Company overview"
+    assert recent[0]["title"] == "New development"
+    assert [call[0] for call in calls] == ["text", "news"]
+    assert calls[1][1]["timelimit"] == "w"
+    assert recent[0]["published"] == "2026-11-05"
+
+
 def feed(title, snippet, published=None):
     return (
         "<rss><channel><item><title>" + title + "</title>"

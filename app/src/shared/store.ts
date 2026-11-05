@@ -318,13 +318,22 @@ export function bindStore(client: WsClient): () => void {
       hydrateStepLogs(m.run_id)
     }),
     client.on('run.finished', (m) => {
-      patchRun(m.run_id, () => ({
-        text: m.text,
+      const existing = useStore.getState().runs[m.run_id]
+      // A late Stop acknowledgement must not replace an already-completed answer.
+      if (m.status === 'cancelled' && existing && existing.status !== 'running') return
+      patchRun(m.run_id, (run) => ({
+        text: m.status === 'cancelled' && !m.text ? run.text : m.text,
         usage: m.usage,
         metrics: m.metrics,
         status: m.status ?? (m.ok ? 'done' : 'cancelled'),
         error: m.status === 'error' ? m.text : undefined,
         finishedAt: Date.now(),
+        activity: undefined,
+        ...(!m.ok ? { steps: run.steps.map((step) =>
+          step.status === 'running' || step.status === 'awaiting_approval'
+            ? { ...step, status: 'failed', summary: m.status === 'error' ? m.text : 'Cancelled',
+                durationMs: step.durationMs ?? Math.max(0, Date.now() - step.startedAt) }
+            : step) } : {}),
       }))
       if (m.usage) {
         useStore.setState((s) => {
@@ -351,7 +360,14 @@ export function bindStore(client: WsClient): () => void {
       hydrateStepLogs(m.run_id)
     }),
     client.on('run.error', (m) => {
-      patchRun(m.run_id, () => ({ status: 'error', error: m.message, finishedAt: Date.now() }))
+      patchRun(m.run_id, (run) => ({
+        status: 'error', error: m.message, finishedAt: Date.now(), activity: undefined,
+        steps: run.steps.map((step) =>
+          step.status === 'running' || step.status === 'awaiting_approval'
+            ? { ...step, status: 'failed', summary: m.message,
+                durationMs: step.durationMs ?? Math.max(0, Date.now() - step.startedAt) }
+            : step),
+      }))
       useStore.setState(endRun(m.run_id))
     }),
     client.on('memory.saved', (m) =>

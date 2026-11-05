@@ -33,6 +33,7 @@ class OpenRouterProvider:
         reasoning_effort: str = "off",
         ollama_cpu_only: bool = False,
         summary_model: str = "",
+        is_ollama: bool | None = None,
     ) -> None:
         self._base_url = base_url
         self._reasoning_effort = reasoning_effort
@@ -40,7 +41,11 @@ class OpenRouterProvider:
         self._summary_model = summary_model
         self._is_openrouter = "openrouter.ai" in base_url.lower()
         self._is_gemini = "generativelanguage.googleapis.com" in base_url.lower()
-        self._is_ollama = "11434" in base_url.lower() or "ollama" in base_url.lower()
+        self._is_ollama = (
+            is_ollama
+            if is_ollama is not None
+            else "11434" in base_url.lower() or "ollama" in base_url.lower()
+        )
         self._client = openai.AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "ollama",

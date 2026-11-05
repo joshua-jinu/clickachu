@@ -90,6 +90,41 @@ Electron will spawn the Python sidecar automatically, establish an authenticated
 
 ---
 
+## Ollama on this PC or another computer
+
+In **Settings → Ollama (Local / Remote)**, choose **This PC** or **Another computer**.
+For another computer, enter its IP address (for example `10.72.23.238`), click
+**Test connection / refresh models**, choose an installed model, and **Save**. The standard
+port and `/v1` endpoint are added automatically for bare IPs/hostnames; full HTTP(S) URLs
+and custom ports are supported. Testing an address does not change the active configuration.
+Local and remote main/fast models and CPU compatibility preferences are remembered separately.
+There is no automatic fallback to another server when a connection fails.
+
+Before remote use:
+
+1. Put both devices on the same trusted Wi-Fi or reachable private network.
+2. Install Ollama and download the model **on the host**.
+3. For a Mac running the Ollama app, run `launchctl setenv OLLAMA_HOST "0.0.0.0:11434"`,
+   then completely quit and reopen Ollama. Allow incoming Ollama connections in the firewall.
+4. Keep the host awake and powered. Find its Wi-Fi IP and enter it in Clickachu.
+5. Leave CPU compatibility off to use the host GPU. Windows Ollama can stay closed for remote use.
+
+Clickachu connects directly to the selected endpoint and does not require Windows `OLLAMA_HOST`.
+Saving **This PC** removes that override from Clickachu's process and the current Windows user's
+saved environment. It cannot change variables in already-open terminals or other running apps.
+In any PowerShell window previously configured for remote Ollama, run:
+
+```powershell
+Remove-Item Env:OLLAMA_HOST -ErrorAction SilentlyContinue
+```
+
+Start/restart Windows Ollama for local inference. Machine-wide environment settings are not changed.
+Remote prompts and context travel to the selected host. Ollama's API has no built-in authentication;
+keep it on a trusted private network and do not forward port 11434 publicly. Update the address in
+Settings if the host IP changes. The Settings panel includes these setup and cleanup instructions.
+
+---
+
 ## Global Hotkeys
 
 | Hotkey | Action | Description |

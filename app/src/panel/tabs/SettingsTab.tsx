@@ -1,22 +1,19 @@
 /** Settings tab: model config + API key, browser settings, voice, projects and allowed folders. */
 import { type FormEvent, useEffect, useState } from 'react'
 import { api } from '@shared/api'
-import type { AudioDevice, OllamaStatusResponse, Settings } from '@shared/protocol'
+import type { AudioDevice, Settings } from '@shared/protocol'
 import { useStore } from '@shared/store'
 import { buttonClass, errorText, inputClass } from '../ui'
 import { ProjectsSection } from './ProjectsSection'
 import { RootsSection } from './RootsSection'
 import { AgentSettings } from './AgentSettings'
+import { OllamaSettings } from './OllamaSettings'
+import { isLocalOllama, normalizeOllamaUrl } from '@shared/ollama'
 
 const GEMINI_DEFAULTS = {
   router_model: 'gemini-2.5-flash-lite',
   agent_model: 'gemini-2.5-pro',
   base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-} as const
-
-const OLLAMA_DEFAULTS = {
-  ollama_model: 'llama3.2:3b',
-  ollama_base_url: 'http://127.0.0.1:11434/v1',
 } as const
 
 /** Two tiers on one provider: a capable thinking model and a small fast model for easy jobs. */
@@ -48,82 +45,17 @@ function SettingsForm() {
   const [sensitiveText, setSensitiveText] = useState('')
   const [devices, setDevices] = useState<AudioDevice[]>([])
   const [voiceStatus, setVoiceStatus] = useState<string>('unloaded')
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusResponse>({ running: false, models: [] })
-  const [checkingOllama, setCheckingOllama] = useState(false)
-
-  const refreshOllama = async () => {
-    setCheckingOllama(true)
-    try {
-      const res = await api.getOllamaStatus()
-      if (res.running) {
-        setOllamaStatus(res)
-        setCheckingOllama(false)
-        return
-      }
-    } catch {
-      // Fall through to direct fetch fallback
-    }
-
-    try {
-      const raw = await fetch('http://127.0.0.1:11434/api/tags')
-      if (raw.ok) {
-        const data = (await raw.json()) as { models?: { name: string; size?: number }[] }
-        const models = (data.models || []).map((m) => ({
-          name: m.name,
-          size: m.size || 0,
-        }))
-        setOllamaStatus({ running: true, models })
-        setCheckingOllama(false)
-        return
-      }
-    } catch {
-      // Direct fetch also failed
-    }
-
-    setOllamaStatus({ running: false, models: [], error: 'Ollama not detected at 127.0.0.1:11434' })
-    setCheckingOllama(false)
-  }
-
   useEffect(() => {
     if (connection !== 'connected') return
     api
       .getSettings()
-      .then(({ has_openrouter_key, voice_model_status, ...settings }) => {
-        setForm(settings)
-        setHasKey(has_openrouter_key)
-        setVoiceStatus(voice_model_status || 'unloaded')
-        setSensitiveText(settings.sensitive_domains.join('\n'))
+      .then((view) => {
+        setForm(view)
+        setHasKey(view.has_openrouter_key)
+        setVoiceStatus(view.voice_model_status || 'unloaded')
+        setSensitiveText(view.sensitive_domains.join('\n'))
       })
       .catch((err: unknown) => setNote(errorText(err)))
-
-    api
-      .getOllamaStatus()
-      .then((res) => {
-        if (res.running) {
-          setOllamaStatus(res)
-        } else {
-          fetch('http://127.0.0.1:11434/api/tags')
-            .then((r) => r.json())
-            .then((d: { models?: { name: string; size?: number }[] }) => {
-              setOllamaStatus({
-                running: true,
-                models: (d.models || []).map((m) => ({ name: m.name, size: m.size || 0 })),
-              })
-            })
-            .catch(() => setOllamaStatus(res))
-        }
-      })
-      .catch(() => {
-        fetch('http://127.0.0.1:11434/api/tags')
-          .then((r) => r.json())
-          .then((d: { models?: { name: string; size?: number }[] }) => {
-            setOllamaStatus({
-              running: true,
-              models: (d.models || []).map((m) => ({ name: m.name, size: m.size || 0 })),
-            })
-          })
-          .catch(() => {})
-      })
 
     api
       .getVoiceDevices()
@@ -148,7 +80,11 @@ function SettingsForm() {
         router_model: form.router_model,
         agent_model: form.agent_model,
         base_url: form.base_url,
-        ollama_base_url: form.ollama_base_url,
+        ...(form.provider === 'ollama'
+          ? { ollama_base_url: normalizeOllamaUrl(form.ollama_base_url) }
+          : {}),
+        ollama_local_profile: form.ollama_local_profile,
+        ollama_remote_profile: form.ollama_remote_profile,
         ollama_model: form.ollama_model,
         ollama_summary_model: form.ollama_summary_model,
         ollama_cpu_only: form.ollama_cpu_only,
@@ -173,7 +109,13 @@ function SettingsForm() {
       })
       setHasKey(view.has_openrouter_key)
       setVoiceStatus(view.voice_model_status || 'unloaded')
-      setNote('Saved.')
+      setForm(view)
+      setNote(
+        view.ollama_environment_warning ||
+          (view.provider === 'ollama' && isLocalOllama(view.ollama_base_url)
+            ? 'Saved. Local Ollama selected; OLLAMA_HOST cleared for Clickachu and the Windows user environment. Existing terminals need the cleanup command below.'
+            : 'Saved.'),
+      )
     } catch (err) {
       setNote(errorText(err))
     }
@@ -212,17 +154,14 @@ function SettingsForm() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              setForm({ ...form, provider: 'ollama' })
-              refreshOllama().catch(() => {})
-            }}
+            onClick={() => setForm({ ...form, provider: 'ollama' })}
             className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-all ${
               isOllama
                 ? 'bg-purple-600 text-white shadow-sm'
                 : 'text-ck-muted hover:bg-white/5 hover:text-ck-text'
             }`}
           >
-            <span>💻 Ollama (On-Device)</span>
+            <span>💻 Ollama (Local / Remote)</span>
           </button>
         </div>
       </div>
@@ -271,123 +210,7 @@ function SettingsForm() {
         </div>
       )}
 
-      {/* Ollama (On-Device) Configuration */}
-      {isOllama && (
-        <div className="space-y-3 rounded-lg border border-purple-500/30 bg-purple-950/10 p-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-purple-200">
-                Ollama On-Device Inference
-              </span>
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  ollamaStatus.running
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'bg-amber-500/20 text-amber-300'
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    ollamaStatus.running ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                />
-                {ollamaStatus.running ? 'Connected' : 'Not running'}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => refreshOllama().catch(() => {})}
-                disabled={checkingOllama}
-                className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-ck-text hover:bg-white/15"
-              >
-                {checkingOllama ? 'Checking…' : 'Refresh'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, ...OLLAMA_DEFAULTS })}
-                className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-ck-text hover:bg-white/15"
-              >
-                Reset defaults
-              </button>
-            </div>
-          </div>
-
-          {/* All downloaded models are selectable, including custom names and tags. */}
-          <label className="block text-xs text-ck-muted">
-            Downloaded Ollama models (thinking model)
-            <select
-              value={form.ollama_model}
-              onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
-              className={inputClass}
-              disabled={checkingOllama || ollamaStatus.models.length === 0}
-            >
-              {!ollamaStatus.models.some((m) => m.name === form.ollama_model) && (
-                <option value={form.ollama_model}>
-                  {form.ollama_model || 'Select a model'}
-                  {form.ollama_model ? ' (not detected)' : ''}
-                </option>
-              )}
-              {ollamaStatus.models.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name} {m.size > 0 ? `(${(m.size / 1e9).toFixed(1)} GB)` : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="text-[11px] text-ck-muted">
-            {ollamaStatus.models.length > 0
-              ? 'Choose any downloaded model, then click Save to use it for local requests.'
-              : ollamaStatus.running
-                ? 'No downloaded models found. Download a model in Ollama, then click Refresh.'
-                : 'Start Ollama, then click Refresh to detect downloaded models.'}
-          </p>
-
-          {/* Model tiers */}
-          <label className="block text-xs text-ck-muted">
-            Thinking model (tasks, questions, explanations)
-            <input
-              value={form.ollama_model}
-              onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
-              className={inputClass}
-              placeholder={OLLAMA_DEFAULTS.ollama_model}
-              spellCheck={false}
-            />
-          </label>
-          <label className="block text-xs text-ck-muted">
-            Fast model (summaries, translation, rewrites, routing, memory) — optional
-            <input
-              value={form.ollama_summary_model}
-              onChange={(e) => setForm({ ...form, ollama_summary_model: e.target.value })}
-              className={inputClass}
-              placeholder="Use the thinking model"
-              spellCheck={false}
-              list="ck-ollama-models"
-            />
-            <datalist id="ck-ollama-models">
-              {ollamaStatus.models.map((m) => (
-                <option key={m.name} value={m.name} />
-              ))}
-            </datalist>
-          </label>
-
-          {/* Base URL */}
-          <label className="block text-xs text-ck-muted">
-            Ollama OpenAI endpoint (default: http://127.0.0.1:11434/v1)
-            <input
-              value={form.ollama_base_url}
-              onChange={(e) => setForm({ ...form, ollama_base_url: e.target.value })}
-              className={inputClass}
-              placeholder={OLLAMA_DEFAULTS.ollama_base_url}
-              spellCheck={false}
-            />
-          </label>
-
-          <p className="text-[11px] text-ck-muted">
-            ✓ 100% private, on-device local inference. No API key needed.
-          </p>
-        </div>
-      )}
+      {isOllama && <OllamaSettings form={form} onChange={setForm} />}
 
       <AgentSettings form={form} onChange={setForm} />
 
@@ -402,7 +225,8 @@ function SettingsForm() {
           Look up factual topics online automatically
         </label>
         <p className="text-[11px] text-ck-muted">
-          Sends search terms to a public search engine in the background. No browser window is opened.
+          Sends search terms to a public search engine in the background. No browser window is
+          opened.
         </p>
         <label className="block text-xs text-ck-muted">
           Translate to (default language)
@@ -543,7 +367,8 @@ function TodayUsageSection() {
             {todayUsage.totalTokens.toLocaleString()}
           </p>
           <span className="text-[10px] text-ck-muted">
-            {todayUsage.inputTokens.toLocaleString()} in · {todayUsage.outputTokens.toLocaleString()} out
+            {todayUsage.inputTokens.toLocaleString()} in ·{' '}
+            {todayUsage.outputTokens.toLocaleString()} out
           </span>
         </div>
         <div className="rounded border border-ck-border bg-black/30 p-2.5">

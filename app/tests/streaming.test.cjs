@@ -139,3 +139,67 @@ test('a tool timeout is not reported as an expired approval', () => {
   assert.match(html, /Tool execution timed out/)
   assert.doesNotMatch(html, /Approval timed out/)
 })
+const ollamaHelpers = () => loadSource('src/shared/ollama.ts', {}, { URL })
+
+test('Ollama switching remembers each server model and CPU preference across saved settings', () => {
+  const { switchOllamaConnection, normalizeOllamaUrl } = ollamaHelpers()
+  const local = {
+    ollama_base_url: 'http://127.0.0.1:11434/v1', ollama_model: 'local-4b',
+    ollama_summary_model: 'local-fast', ollama_cpu_only: true,
+    ollama_local_profile: null, ollama_remote_profile: null,
+  }
+  let remote = switchOllamaConnection(local, false)
+  assert.equal(remote.ollama_base_url, '')
+  assert.equal(remote.ollama_cpu_only, false)
+  remote = { ...remote, ollama_base_url: normalizeOllamaUrl('10.72.23.238'), ollama_model: 'qwen3.5:9b' }
+  const restored = switchOllamaConnection(remote, true)
+  assert.equal(restored.ollama_base_url, local.ollama_base_url)
+  assert.equal(restored.ollama_model, 'local-4b')
+  assert.equal(restored.ollama_summary_model, 'local-fast')
+  assert.equal(restored.ollama_cpu_only, true)
+  const reloaded = JSON.parse(JSON.stringify(restored))
+  const again = switchOllamaConnection(reloaded, false)
+  assert.equal(again.ollama_base_url, 'http://10.72.23.238:11434/v1')
+  assert.equal(again.ollama_model, 'qwen3.5:9b')
+  assert.equal(again.ollama_cpu_only, false)
+})
+
+test('Ollama incomplete remote drafts do not replace a working local profile', () => {
+  const { switchOllamaConnection, normalizeOllamaUrl } = ollamaHelpers()
+  const local = { ollama_base_url: 'http://127.0.0.1:11434/v1', ollama_model: 'local', ollama_cpu_only: true }
+  const draft = switchOllamaConnection(local, false)
+  const restored = switchOllamaConnection(draft, true)
+  assert.equal(restored.ollama_model, 'local')
+  assert.equal(restored.ollama_remote_profile, undefined)
+  assert.equal(normalizeOllamaUrl('mac.local:12345'), 'http://mac.local:12345/v1')
+  assert.equal(normalizeOllamaUrl('https://host/prefix/v1/'), 'https://host/prefix/v1')
+  assert.throws(() => normalizeOllamaUrl('file:///etc'))
+})
+
+test('run errors and Stop acknowledgements release busy state and finish pending steps', () => {
+  const store = loadSource('src/shared/store.ts', { './api': { api: { getLog: async () => [] } } })
+  const handlers = {}
+  store.bindStore({
+    onStatus: () => () => {},
+    on: (name, handler) => { handlers[name] = handler; return () => {} },
+  })
+  store.recordChatRun({ runId: 'crash', prompt: 'latest news' })
+  handlers['step.started']({ run_id: 'crash', step_id: 'search', tool: 'web_search', summary: 'Searching', tier: 'read' })
+  handlers['run.error']({ run_id: 'crash', message: 'Internal error' })
+  assert.equal(store.useStore.getState().activeRunId, null)
+  assert.equal(store.useStore.getState().runs.crash.status, 'error')
+  assert.equal(store.useStore.getState().runs.crash.steps[0].status, 'failed')
+
+  store.recordChatRun({ runId: 'stale', prompt: 'hello' })
+  handlers.token({ run_id: 'stale', delta: 'Partial answer' })
+  handlers['run.finished']({ run_id: 'stale', ok: false, status: 'cancelled', text: '' })
+  assert.equal(store.useStore.getState().activeRunId, null)
+  assert.equal(store.useStore.getState().runs.stale.status, 'cancelled')
+  assert.equal(store.useStore.getState().runs.stale.text, 'Partial answer')
+
+  store.recordChatRun({ runId: 'done', prompt: 'hello' })
+  handlers['run.finished']({ run_id: 'done', ok: true, text: 'Completed answer' })
+  handlers['run.finished']({ run_id: 'done', ok: false, status: 'cancelled', text: '' })
+  assert.equal(store.useStore.getState().runs.done.status, 'done')
+  assert.equal(store.useStore.getState().runs.done.text, 'Completed answer')
+})

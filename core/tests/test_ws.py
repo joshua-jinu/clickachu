@@ -158,9 +158,10 @@ def test_broadcast_reaches_all_windows(make_app: AppFactory) -> None:
         with client.websocket_connect(WS_URL) as a, client.websocket_connect(WS_URL) as b:
             a.send_json({"type": "auth", "token": TOKEN})
             b.send_json({"type": "auth", "token": TOKEN})
-            # Make sure b's auth has been processed before a starts the run.
+            # A Stop acknowledgement is also a barrier proving b finished authentication.
             b.send_json({"type": "cancel", "run_id": "noop"})
-            time.sleep(0.05)
+            assert receive_until(a, "run.finished")[-1]["status"] == "cancelled"
+            assert receive_until(b, "run.finished")[-1]["status"] == "cancelled"
             a.send_json({"type": "run", "run_id": "r1", "text": "hi"})
             assert receive_until(a, "run.finished")[-1]["text"] == "x"
             assert receive_until(b, "run.finished")[-1]["text"] == "x"

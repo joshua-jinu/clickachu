@@ -18,7 +18,7 @@ from clickachu.context.redact import redact
 from clickachu.tools.base import Tier, Tool, ToolContext, ToolResult
 
 MAX_BYTES = 1_000_000
-_CACHE: dict[tuple[str, str, int | None], tuple[float, list[dict[str, str]]]] = {}
+_CACHE: dict[tuple[str, str, int | None, bool], tuple[float, list[dict[str, str]]]] = {}
 _PAGES: dict[str, tuple[float, ToolResult]] = {}
 
 
@@ -217,24 +217,40 @@ def _duck_results(query, recent=False, days=None):
     from ddgs import DDGS
     from ddgs.engines import ENGINES
 
-    if "duckduckgo" not in ENGINES["text"]:
+    def fallback():
+        if recent:
+            terms = query + f" when:{days or 7}d"
+            return _rss_results(
+                "https://news.google.com/rss/search?q="
+                + urllib.parse.quote_plus(terms)
+                + "&hl=en-IN&gl=IN&ceid=IN:en",
+                news=True,
+            )
         return _lite_results(query)
+
+    if "duckduckgo" not in ENGINES.get("news" if recent else "text", {}):
+        return fallback()
     try:
-        entries = DDGS(timeout=4).text(
-            query, backend="duckduckgo", max_results=5, timelimit="d" if days == 1 else None
+        client = DDGS(timeout=4)
+        search = client.news if recent else client.text
+        time_limit = (
+            ("d" if days == 1 else "w" if (days or 7) <= 7 else "m" if days <= 31 else "y")
+            if recent
+            else ("d" if days == 1 else None)
         )
+        entries = search(query, backend="duckduckgo", max_results=5, timelimit=time_limit)
         return [
             {
                 "title": e.get("title", ""),
                 "url": e.get("href", e.get("url", "")),
-                "snippet": e.get("body", "")[:450],
+                "snippet": e.get("body", e.get("excerpt", ""))[:450],
                 "published": e.get("date", "Not supplied"),
                 "provider": "DuckDuckGo",
             }
             for e in entries
         ]
     except Exception:  # noqa: BLE001 - the maintained transport has provider-specific failures.
-        return _lite_results(query)  # Same engine; no model-driven provider/query loop.
+        return fallback()
 
 
 def search_web(
@@ -247,7 +263,7 @@ def search_web(
     """Transport only: the research agent owns query meaning, relevance, and retries."""
     query = redact(query).strip()
     provider = "duckduckgo" if provider == "auto" else provider
-    key = (query, provider, days)
+    key = (query, provider, days, recent)
     cached = _CACHE.get(key)
     if cached and time.monotonic() - cached[0] < (60 if recent or provider == "news" else 300):
         return cached[1]

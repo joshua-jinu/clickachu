@@ -46,6 +46,13 @@ export interface OllamaStatusResponse {
   error?: string | null
 }
 
+export interface OllamaConnectionProfile {
+  base_url: string
+  model: string
+  summary_model: string
+  cpu_only: boolean
+}
+
 export interface Settings {
   provider: LLMProviderType
   router_model: string
@@ -56,6 +63,8 @@ export interface Settings {
   ollama_model: string
   ollama_summary_model: string
   ollama_cpu_only: boolean
+  ollama_local_profile: OllamaConnectionProfile | null
+  ollama_remote_profile: OllamaConnectionProfile | null
   translate_language: string
   /** Logs every outgoing prompt (after redaction) so redaction can be verified (§10). */
   debug_log_prompts: boolean
@@ -88,6 +97,7 @@ export interface Settings {
 export interface SettingsView extends Settings {
   has_openrouter_key: boolean
   voice_model_status: string
+  ollama_environment_warning?: string | null
 }
 
 export type SettingsUpdate = Partial<Settings>

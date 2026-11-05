@@ -36,7 +36,12 @@ class SettingsStore:
 
     def update(self, patch: SettingsUpdate) -> Settings:
         with self._lock:
-            merged = self._load().model_copy(update=patch.model_dump(exclude_none=True))
+            merged = Settings.model_validate(
+                {
+                    **self._load().model_dump(),
+                    **patch.model_dump(exclude_none=True),
+                }
+            )
             self._write(merged)
             return merged
 

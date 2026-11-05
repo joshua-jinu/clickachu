@@ -32,6 +32,7 @@ def no_unexpected_search_network(monkeypatch):
         raise RuntimeError("Public search transport must be stubbed in unit tests")
 
     monkeypatch.setattr(DDGS, "text", disabled)
+    monkeypatch.setattr(DDGS, "news", disabled)
 
 
 AppFactory = Callable[..., FastAPI]

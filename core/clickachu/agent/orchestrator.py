@@ -139,6 +139,7 @@ class _ActiveRun:
     started: float = field(default_factory=time.monotonic)
     window_grants: set[tuple[int, int]] = field(default_factory=set)
     goal: RequestGoal | None = None
+    terminal_sent: bool = False
 
 
 class Orchestrator:
@@ -194,6 +195,10 @@ class Orchestrator:
                         }
                     )
         await self._send(event)
+        if isinstance(event, (RunFinishedEvent, RunErrorEvent)):
+            active = self._runs.get(event.run_id)
+            if active:
+                active.terminal_sent = True
 
     async def handle_run(self, msg: ClientMessage) -> None:
         assert isinstance(msg, RunMessage)
@@ -214,6 +219,31 @@ class Orchestrator:
         self._runs[msg.run_id] = active
         try:
             await self._run(msg, active)
+        except asyncio.CancelledError:
+            # Routing and setup can be cancelled before the Ask/Agent handlers take over.
+            if not active.terminal_sent:
+                await self._emit(
+                    RunFinishedEvent(run_id=msg.run_id, ok=False, text="", usage=Usage())
+                )
+                await self._emit(OrbStateEvent(state="idle"))
+            raise
+        except TimeoutError:
+            if not active.terminal_sent:
+                await self._fail(
+                    msg.run_id,
+                    "The request timed out. Check the model server and network, then retry.",
+                )
+        except LLMError as exc:
+            if not active.terminal_sent:
+                await self._fail(msg.run_id, str(exc))
+        except Exception as exc:  # noqa: BLE001 — terminate the UI even on unexpected bugs.
+            log.exception("run %s crashed", msg.run_id)
+            if not active.terminal_sent:
+                await self._fail(
+                    msg.run_id,
+                    f"Clickachu stopped because of an internal error ({type(exc).__name__}). "
+                    "The request did not complete. Please retry; details are in sidecar.log.",
+                )
         finally:
             if active.checkpoint and active.checkpoint.get("status") == "running":
                 active.checkpoint["status"] = "interrupted"
@@ -237,6 +267,14 @@ class Orchestrator:
         active = self._runs.get(msg.run_id)
         if active is None:
             log.info("cancel for unknown or finished run %s", msg.run_id)
+            # Reconcile a renderer left busy by an older crash or a sidecar restart.
+            await self._emit(
+                RunFinishedEvent(
+                    run_id=msg.run_id, ok=False, status="cancelled", text="", usage=Usage()
+                )
+            )
+            if not self._runs:
+                await self._emit(OrbStateEvent(state="idle"))
             return
         active.cancelled = True
         for fut in list(active.approvals.values()):
@@ -663,7 +701,8 @@ class Orchestrator:
             failed_signatures.add(
                 initial_evidence[0] + ":" + json.dumps(initial_evidence[1], sort_keys=True)
             )
-        goal = request_goal(msg.text)
+        goal = active.goal or request_goal(msg.text)
+        launch_target = requested_launch_target(msg.text)
         if goal and goal.kind == "media" and initial_evidence:
             goal = replace(goal, target=initial_evidence[1].get("app", goal.target))
         current_step: tuple[str, str, str, str, float] | None = None
@@ -1456,7 +1495,7 @@ class Orchestrator:
                         )
                         continue
                     if (
-                        tool.tier.value != "read"
+                        (tool.tier.value != "read" or tool.name == "discover_tools")
                         and signature == last_action_signature
                         and repeated_action_count >= 1
                     ):
