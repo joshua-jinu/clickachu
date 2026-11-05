@@ -252,8 +252,22 @@ class ToolRegistry:
                     "list_windows",
                 )
             )
-        elif any(term in p for term in ("browser", "website", "http", "web page")):
-            names.update(("browser_open", "browser_read", "browser_click", "browser_fill"))
+        elif re.search(
+            r"\b(?:browser|website|web\s*page|https?|url|chrome|edge|firefox|brave|youtube|gmail"
+            r"|google|wikipedia|reddit|github|twitter|instagram|facebook|linkedin|amazon|netflix)\b"
+            r"|\b[\w-]+\.(?:com|org|net|io|in|co|dev|ai|edu|gov)\b",
+            p,
+        ):
+            names.update(
+                (
+                    "browser_open",
+                    "browser_search",
+                    "browser_read",
+                    "browser_click",
+                    "browser_fill",
+                    "browser_submit",
+                )
+            )
         elif any(
             term in p
             for term in ("window", "app", "click", "type", "screen", "open", "store", "search in")

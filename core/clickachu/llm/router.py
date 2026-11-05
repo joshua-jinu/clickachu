@@ -28,12 +28,40 @@ def web_lookup_requested(text: str) -> bool:
     return bool(_WEB_LOOKUP.search(text)) and not bool(_NO_ACTION.search(text))
 
 
+_SCREEN_QUESTION = re.compile(
+    r"\b(?:(?:on|in|at)\s+(?:my|the)\s+(?:screen|display|monitor|desktop)\b"
+    r"|(?:see|read|look\s+at|describe|check|view)\s+(?:my|the)\s+(?:screen|display|desktop)\b"
+    r"|what(?:['’]s|\s+is|\s+am\s+i|\s+are\s+you)\s+(?:currently\s+)?"
+    r"(?:visible|showing|on\s+screen|looking\s+at|seeing)\b"
+    r"|what\s+(?:windows|apps|applications|programs)\s+(?:are\s+|do\s+i\s+have\s+)?open\b)",
+    re.IGNORECASE,
+)
+
+
+def screen_question_requested(text: str) -> bool:
+    """Questions about the user's own screen are local observation, never a web search."""
+    return bool(_SCREEN_QUESTION.search(text)) and not bool(
+        re.search(
+            r"\b(?:screen\s*(?:saver|time|resolution|size|reader)|how\s+(?:do|can|to))\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+_NOTEPAD_WRITE_VERB = r"\b(?:write|type|put|draft|compose|insert|add|paste|enter|jot)\b"
+
+
 def notepad_write_requested(text: str) -> bool:
     """A bounded unsaved-editor task; explicit file/save requests use the general agent."""
     return (
         bool(re.search(r"\b(?:notepad|nodepad|note\s+pad)(?:\.exe)?\b", text, re.IGNORECASE))
-        and bool(re.search(r"\b(?:write|type|put|draft|compose|insert)\b", text, re.IGNORECASE))
+        and bool(re.search(_NOTEPAD_WRITE_VERB, text, re.IGNORECASE))
         and not bool(re.search(r"\b(?:save|file|folder|path)\b", text, re.IGNORECASE))
+        # "Add Notepad to the taskbar/startup" is app management, not document writing.
+        and not bool(
+            re.search(r"\b(?:pin|taskbar|startup|start\s+menu|uninstall)\b", text, re.IGNORECASE)
+        )
         and not bool(
             re.match(r"\s*(?:how\s+(?:do|can|to)|explain|don't|do\s+not)", text, re.IGNORECASE)
         )
@@ -142,6 +170,8 @@ def heuristic_mode(
     if _NO_ACTION.search(stripped):
         return "ask"
     if web_lookup_requested(stripped) or notepad_write_requested(stripped):
+        return "agent"
+    if screen_question_requested(stripped):
         return "agent"
     if re.match(
         r"^\s*(?:(?:please|can\s+you|could\s+you|would\s+you|hey)[,\s]+)*"

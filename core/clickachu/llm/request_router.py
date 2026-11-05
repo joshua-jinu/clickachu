@@ -8,7 +8,12 @@ from typing import Literal
 from clickachu.llm.json_ask import make_ask_json
 from clickachu.llm.provider import LLMError, LLMProvider
 from clickachu.llm.research_subject import explicit_subject, preserve_subject
-from clickachu.llm.router import heuristic_mode, lookup_query, web_lookup_requested
+from clickachu.llm.router import (
+    heuristic_mode,
+    lookup_query,
+    screen_question_requested,
+    web_lookup_requested,
+)
 from clickachu.llm.time_context import date_context, today
 
 
@@ -32,6 +37,13 @@ _SOCIAL = re.compile(
 )
 _OFFLINE = re.compile(
     r"\b(?:offline|(?:don't|do\s+not|never)\s+(?:search|browse|check|look|google|do\s+anything))\b",
+    re.IGNORECASE,
+)
+# Where to watch/buy/stream something changes over time; model memory is never enough.
+_AVAILABILITY = re.compile(
+    r"\b(?:where|which\s+(?:ott|streaming|platform|service|app|site|website|store|channel))\b"
+    r"[^.!?\n]{0,40}\b(?:watch|stream|buy|purchase|rent|download|listen|available|find|get)\b"
+    r"|\b(?:ott|streaming)\s+(?:platform|service|app)s?\b",
     re.IGNORECASE,
 )
 _CACHE: dict[tuple[str, str, str, str], RequestRoute] = {}
@@ -74,6 +86,9 @@ async def route_request(
     # These are clear UI/user constraints, not topic-specific knowledge rules.
     if _OFFLINE.search(text):
         return RequestRoute("ask")
+    if screen_question_requested(text):
+        # "What is currently on my screen?" is local observation, not a public web search.
+        return RequestRoute("agent")
     if web_lookup_requested(text):
         return _research(text, history)
     if action not in (None, "ask"):
@@ -85,6 +100,8 @@ async def route_request(
         return RequestRoute("ask")
     if explicit_subject(text):
         return _research(text, history, explicit_subject(text))
+    if _AVAILABILITY.search(text):
+        return _research(text, history, recent=True)
     # Freshness is a mandatory safeguard even if a small model would misclassify it.
     if _FRESH.search(text):
         return _research(text, history, recent=True)

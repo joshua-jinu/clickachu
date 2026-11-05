@@ -495,6 +495,9 @@ class OpenAppTool(Tool[OpenAppArgs]):
         if not resolved:
             return ToolResult(ok=False, summary=f"Could not resolve application {args.name!r}")
 
+        win32 = RealWin32()
+        # Existing windows of the same app must not be mistaken for the one just launched.
+        before = {(h, t) for h, t, _ in _enumerate_windows(win32)}
         try:
             if resolved.lower().endswith(".lnk") or resolved.startswith(
                 ("shell:", "ms-windows-store:")
@@ -514,11 +517,11 @@ class OpenAppTool(Tool[OpenAppArgs]):
 
         # Verification poll: wait up to 5s for window by process name AND title (§13.3)
         # Windows 11 Notepad hand-off: notepad.exe delegates to the modern packaged Notepad app.
-        win32 = RealWin32()
         deadline = time.monotonic() + 5.0
         app_stem = Path(resolved).stem.lower()
 
         found_win: tuple[int, str, str] | None = None
+        fallback: tuple[int, str, str] | None = None
         while time.monotonic() < deadline:
             time.sleep(0.3)
             windows = _enumerate_windows(win32)
@@ -535,10 +538,16 @@ class OpenAppTool(Tool[OpenAppArgs]):
                     or args.name.lower() in t_lower
                     or is_notepad
                 ):
-                    found_win = (h, t, p)
-                    break
-            if found_win:
+                    # A new window, or a single-instance app's window whose title changed
+                    # (e.g. a new Notepad tab), is the launched one.
+                    if (h, t) not in before:
+                        found_win = (h, t, p)
+                        break
+                    fallback = fallback or (h, t, p)
+            if found_win or (fallback and deadline - time.monotonic() < 3.5):
                 break
+        # Single-instance apps may just re-activate an unchanged existing window.
+        found_win = found_win or fallback
 
         if found_win:
             hwnd, title, proc = found_win

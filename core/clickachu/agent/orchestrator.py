@@ -63,6 +63,7 @@ from clickachu.llm.router import (
     heuristic_mode,
     notepad_write_requested,
     route_mode,
+    screen_question_requested,
     web_lookup_requested,
 )
 from clickachu.llm.time_context import date_context
@@ -623,6 +624,13 @@ class Orchestrator:
         attempted_tools: list[str] = []
         last_action_signature = None
         repeated_action_count = 0
+        # Identical calls that already failed; re-running them without new evidence just
+        # reproduces the failure (e.g. the same control_media call three times in a row).
+        failed_signatures: set[str] = set()
+        if initial_evidence and not initial_evidence[2].ok:
+            failed_signatures.add(
+                initial_evidence[0] + ":" + json.dumps(initial_evidence[1], sort_keys=True)
+            )
         goal = request_goal(msg.text)
         if goal and goal.kind == "media" and initial_evidence:
             goal = replace(goal, target=initial_evidence[1].get("app", goal.target))
@@ -768,9 +776,37 @@ class Orchestrator:
                         "content": msg.text + "\nInitial topic hint: " + research_query,
                     },
                 ]
+            screen_workflow = (
+                not notepad_workflow
+                and not research_workflow
+                and screen_question_requested(msg.text)
+                and self._registry.get("observe_desktop") is not None
+            )
+            if screen_workflow:
+                # Describing the screen is read-only observation; never search or act.
+                tool_schemas = self._registry.schemas(
+                    names=["get_active_context", "list_windows", "observe_desktop"]
+                )
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The user is asking what is on their own screen. You CAN observe it "
+                            "with tools: call get_active_context for the foreground window, "
+                            "list_windows for other open windows, and observe_desktop on the "
+                            "foreground window"
+                            + (" with include_image=true" if model_caps.images else "")
+                            + ". Then answer in 2-5 sentences describing the foreground app, "
+                            "what it shows, and other open windows. Never claim you cannot see "
+                            "the screen, never search the web, and never click or type."
+                        ),
+                    }
+                )
             plan = (
-                "Generate the requested text once, then request approval to write it into a fresh "
-                "empty Notepad document. Verify the editor text and leave it open, unsaved."
+                "Observe the foreground window and open windows, then describe them."
+                if screen_workflow
+                else "Generate the requested text once, then request approval to write it into "
+                "a fresh empty Notepad document. Verify the editor text and leave it open, unsaved."
                 if notepad_workflow
                 else "Look up public sources in the background and answer with source links."
                 if research_workflow
@@ -1076,6 +1112,12 @@ class Orchestrator:
                             and tc.id == f"notepad_{msg.run_id}"
                         )
                     )
+                    if screen_workflow:
+                        allowed = tc.name in (
+                            "get_active_context",
+                            "list_windows",
+                            "observe_desktop",
+                        )
                     tool = self._registry.get(tc.name) if allowed else None
                     if tool is None:
                         err_text = f"unknown tool {tc.name!r}"
@@ -1163,6 +1205,30 @@ class Orchestrator:
                             )
                             continue
                     signature = tool.name + ":" + parsed_args.model_dump_json()
+                    plain_args = parsed_args.model_dump(mode="json")
+                    failure_key = f"{tool.name}:{json.dumps(plain_args, sort_keys=True)}"
+                    if tool.tier.value != "read" and failure_key in failed_signatures:
+                        consecutive_failures += 1
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": wrap_untrusted(
+                                    f"tool:{tool.name}",
+                                    "Not executed: this exact call already failed. Inspect the "
+                                    "live state (observe_desktop / list_windows) and use a "
+                                    "different method or different arguments.",
+                                ),
+                            }
+                        )
+                        await self._emit(
+                            RunDetailEvent(
+                                run_id=msg.run_id,
+                                kind="activity",
+                                delta="Skipping a retry of a failed action; choosing another…",
+                            )
+                        )
+                        continue
                     if (
                         tool.tier.value != "read"
                         and signature == last_action_signature
@@ -1413,6 +1479,10 @@ class Orchestrator:
                     else:
                         last_action_signature = None
                         repeated_action_count = 0
+                        failed_signatures.add(failure_key)
+                    if result.ok and verified is not False and tool.tier.value != "read":
+                        # A successful state change is new evidence; earlier failures may now work.
+                        failed_signatures.clear()
                     active.checkpoint["pending_action"] = None
                     active.checkpoint["context"] = confirmed_context(
                         active.checkpoint["context"], tool.name, parsed_args, result, verified
@@ -1926,7 +1996,15 @@ class Orchestrator:
                 if len(cleaned) > 1500:
                     cleaned = cleaned[:1500] + "... [truncated]"
                 history.append({"role": role, "content": cleaned})
-        return history
+        # A user turn with no reply was cancelled or failed before answering. Replaying it makes
+        # the model act on the abandoned request instead of the new one ("open Chrome" opening
+        # Notepad), so keep only user turns that were followed by an assistant reply.
+        return [
+            message
+            for index, message in enumerate(history)
+            if message["role"] != "user"
+            or (index + 1 < len(history) and history[index + 1]["role"] == "assistant")
+        ]
 
     async def _memories_for(
         self,

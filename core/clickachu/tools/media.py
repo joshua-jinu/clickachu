@@ -77,7 +77,9 @@ class ControlMediaTool(Tool[MediaArgs]):
         try:
             manager = await media_manager()
             session = matching_session(manager, args.app)
+            launched = False
             if session is None and args.launch and args.action == "play":
+                launched = True
                 from clickachu.tools.desktop import OpenAppArgs, OpenAppTool
 
                 opened = await ctx.workers.run(
@@ -104,10 +106,19 @@ class ControlMediaTool(Tool[MediaArgs]):
                     session.try_play_async if args.action == "play" else session.try_pause_async
                 )
                 accepted = await method()
-                deadline = time.monotonic() + 3
-                while accepted and status != expected and time.monotonic() < deadline:
+                # A just-launched player registers its media session before it is ready to
+                # obey transport commands, so reissue the command while it warms up. A running
+                # player that refuses the command is reported immediately.
+                wait_s = 10 if launched else 3 if accepted else 0
+                deadline = time.monotonic() + wait_s
+                next_retry = time.monotonic() + 1.0
+                while status != expected and time.monotonic() < deadline:
                     await asyncio.sleep(0.15)
                     status = playback_status(session)
+                    if status != expected and launched and time.monotonic() >= next_retry:
+                        # try_play/try_pause are idempotent, so reissuing them is safe.
+                        await method()
+                        next_retry = time.monotonic() + 1.0
                 if status != expected:
                     return ToolResult(
                         ok=False,
