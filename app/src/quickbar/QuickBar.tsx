@@ -133,14 +133,9 @@ export function QuickBar() {
   const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
   const focusPromptAfterShow = useCallback(() => {
     requestAnimationFrame(() => {
-      const activeElement = document.activeElement
-      if (activeElement !== document.body && activeElement !== promptRef.current) return
       window.focus()
       requestAnimationFrame(() => {
-        const focusedElement = document.activeElement
-        if (focusedElement === document.body || focusedElement === promptRef.current) {
-          promptRef.current?.focus({ preventScroll: true })
-        }
+        promptRef.current?.focus({ preventScroll: true })
       })
     })
   }, [])
@@ -170,6 +165,18 @@ export function QuickBar() {
     voiceRun?.text ?? '',
     (voiceRun?.steps.length ?? 0) > 0 || voiceRun?.mode === 'agent',
   )
+
+  useEffect(() => {
+    if (!lastRun || isRunning(lastRun)) return
+    const input = promptRef.current
+    if (!input || input.getClientRects().length === 0) return
+    requestAnimationFrame(() => {
+      window.focus()
+      requestAnimationFrame(() => {
+        if (input.getClientRects().length > 0) input.focus({ preventScroll: true })
+      })
+    })
+  }, [lastRun?.status, lastRun?.finishedAt])
 
   useLayoutEffect(() => {
     listeningRef.current = isListening

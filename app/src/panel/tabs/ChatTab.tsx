@@ -136,6 +136,17 @@ export function ChatTab({ focusRequest = 0 }: { focusRequest?: number }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [history.length, activeRun?.text, activeRun?.steps.length])
 
+  useEffect(() => {
+    if (activeRunId !== null) return
+    const input = inputRef.current
+    if (!input || input.getClientRects().length === 0) return
+    const frame = requestAnimationFrame(() => {
+      window.focus()
+      requestAnimationFrame(() => input.focus({ preventScroll: true }))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [activeRun?.status, activeRunId])
+
   useLayoutEffect(() => {
     const el = inputRef.current
     if (!el) return

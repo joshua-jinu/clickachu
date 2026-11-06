@@ -35,6 +35,7 @@ let rendererReady = false
 let pendingPanelFocus: boolean | null = null
 let quitting = false
 let quickBarWorkspacePositioning: {
+  hide: () => void
   capture: () => void
   position: (bounds: Rectangle, orbOffset: Point) => void
   restore: () => void
@@ -126,6 +127,7 @@ function notifyPanelShown(focusComposer: boolean): void {
 export function showPanel(takeFocus = true, focusComposer = takeFocus): void {
   if (!win) createPanelWindow()
   if (!win) return
+  quickBarWorkspacePositioning?.hide()
   const focusOnOpen = focusComposer && (!win.isVisible() || win.isMinimized())
   const bounds = sidebarBounds()
   // Reassert native geometry on every open; hidden windows can retain stale bounds across

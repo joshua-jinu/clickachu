@@ -310,6 +310,7 @@ export function setQuickBarContentHeight(h: number): void {
 }
 
 registerQuickBarWorkspacePositioning({
+  hide: hideQuickBar,
   capture: captureQuickBarWorkspaceOrigin,
   position: positionQuickBarForWorkspace,
   restore: restoreQuickBarAfterWorkspace,
