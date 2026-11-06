@@ -1744,6 +1744,18 @@ class Orchestrator:
                                 ),
                             }
                         )
+                    if unchanged_reads >= 3:
+                        controller_notes.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "This read has returned the same evidence repeatedly. Stop "
+                                    "reading this page and finish the request from the evidence "
+                                    "already available. If the requested result is achieved, "
+                                    "report success; otherwise state the specific blocker."
+                                ),
+                            }
+                        )
                     if result.ok and verified is not False:
                         repeated_action_count = (
                             repeated_action_count + 1 if signature == last_action_signature else 1
@@ -1864,13 +1876,64 @@ class Orchestrator:
                             verified=verified,
                         )
                     )
-                    if unchanged_reads >= 3:
-                        raise LLMError(
-                            "Stopped repeated reads with no new information. "
-                            "The task is incomplete; no further action was taken."
-                        )
                     completed_summaries.append(f"{tool.name}: {result.summary}")
                     completion = (tool.name, parsed_args, result, verified)
+                    simple_open_request = bool(
+                        re.fullmatch(
+                            r"(?:please )?(?:open|visit|go to) .+",
+                            msg.text.strip().rstrip(".!?"),
+                            re.IGNORECASE,
+                        )
+                        and not re.search(r"\b(?:and|then)\b", msg.text, re.IGNORECASE)
+                    )
+                    if (
+                        simple_open_request
+                        and tool.name == "browser_open"
+                        and result.ok
+                        and verified is True
+                    ):
+                        final_text = redact(result.summary)
+                        self._record_message(conversation_id, "assistant", final_text)
+                        await self._emit(TokenEvent(run_id=msg.run_id, delta=final_text))
+                        await self._emit(
+                            RunFinishedEvent(
+                                run_id=msg.run_id,
+                                ok=True,
+                                status="done",
+                                text=final_text,
+                                usage=total_usage,
+                            )
+                        )
+                        await set_orb("idle")
+                        return
+                    if (
+                        unchanged_reads >= 3
+                        and tool.name == "browser_read"
+                        and verified is not False
+                        and any(item.startswith("browser_open: ") for item in completed_summaries)
+                        and simple_open_request
+                    ):
+                        # A simple navigation request is already complete once the
+                        # destination opened successfully. Don't ask the model to
+                        # reinterpret identical page snapshots until it hits the cap.
+                        final_text = next(
+                            item.removeprefix("browser_open: ")
+                            for item in completed_summaries
+                            if item.startswith("browser_open: ")
+                        )
+                        self._record_message(conversation_id, "assistant", final_text)
+                        await self._emit(TokenEvent(run_id=msg.run_id, delta=final_text))
+                        await self._emit(
+                            RunFinishedEvent(
+                                run_id=msg.run_id,
+                                ok=True,
+                                status="done",
+                                text=final_text,
+                                usage=total_usage,
+                            )
+                        )
+                        await set_orb("idle")
+                        return
                     if (
                         goal
                         and goal.kind in ("media", "media_selection")

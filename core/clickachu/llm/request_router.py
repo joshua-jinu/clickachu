@@ -29,6 +29,15 @@ _FRESH = re.compile(
     r"|(?:this|last|next)\s+(?:week|month|year)|right\s+now|as\s+of)\b",
     re.IGNORECASE,
 )
+# "Latest" can ask for current product specifications, rather than recent news.
+# Keep it on current web search so product questions do not land in opinion/news feeds.
+_CURRENT_PRODUCT = re.compile(
+    r"\b(?:latest|newest|current)\b[^.!?\n]{0,80}"
+    r"\b(?:features?|specifications?|specs|model|version|laptop|phone|macbook|iphone|ipad)\b"
+    r"|\b(?:features?|specifications?|specs)\b[^.!?\n]{0,80}"
+    r"\b(?:latest|newest|current)\b",
+    re.IGNORECASE,
+)
 _SOCIAL = re.compile(
     r"\s*(?:(?:hello|helo|hi|hey|namaste|thanks|thank\s+you)[,!?.\s]*)?"
     r"(?:(?:who\s+are\s+you|what\s+can\s+you\s+do(?:\s+for\s+me)?|how\s+are\s+you)"
@@ -66,6 +75,8 @@ def _research(
 ) -> RequestRoute:
     query = preserve_subject(text, query.strip()[:400] or lookup_query(text, history))
     recent = recent or bool(_FRESH.search(text))
+    if _CURRENT_PRODUCT.search(text) and not re.search(r"\b(?:news|headlines|breaking)\b", text, re.I):
+        recent = False
     if recent and not re.search(r"\b(?:19|20)\d{2}\b", text):
         # A classifier must not smuggle its training year into a current-event query.
         query = re.sub(r"\b(?:19|20)\d{2}\b", "", query).strip()

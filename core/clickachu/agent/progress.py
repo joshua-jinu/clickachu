@@ -30,9 +30,13 @@ class ReadProgress:
             return 0
         signature = tool.name + ":" + args.model_dump_json()
         # Structured data has stable UI refs/values; the prose may include a random snapshot ID.
-        payload = (
-            result.data if result.data is not None else result.untrusted_text or result.summary
-        )
+        # Some tools put the useful content in untrusted_text and only metadata in data
+        # (browser_read is one example). Include both so changed page content counts as
+        # progress even when the URL and interactive element count stay the same.
+        payload = {
+            "data": result.data,
+            "text": result.untrusted_text or result.summary,
+        }
         fingerprint = json.dumps(
             stable_result(payload), sort_keys=True, ensure_ascii=False, default=str
         )

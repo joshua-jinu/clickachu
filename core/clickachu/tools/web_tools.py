@@ -221,9 +221,8 @@ def _duck_results(query, recent=False, days=None):
         if recent:
             terms = query + f" when:{days or 7}d"
             return _rss_results(
-                "https://news.google.com/rss/search?q="
-                + urllib.parse.quote_plus(terms)
-                + "&hl=en-IN&gl=IN&ceid=IN:en",
+                "https://www.bing.com/news/search?format=rss&q="
+                + urllib.parse.quote_plus(terms),
                 news=True,
             )
         return _lite_results(query)
@@ -272,9 +271,7 @@ def search_web(
     elif provider == "news":
         terms = query + (f" when:{days}d" if days else "")
         results = _rss_results(
-            "https://news.google.com/rss/search?q="
-            + urllib.parse.quote_plus(terms)
-            + "&hl=en-IN&gl=IN&ceid=IN:en",
+            "https://www.bing.com/news/search?format=rss&q=" + urllib.parse.quote_plus(terms),
             news=True,
         )
     elif provider == "bing":
